@@ -411,15 +411,20 @@ class IndustrialSplitterHandle(QSplitterHandle):
         # slim line provides the visual boundary that the old short grip did
         # not communicate on its own.
         splitter_name = self.splitter().objectName()
-        divider_alpha = 185 if splitter_name == 'workspaceSplitter' else 145
-        divider_color = (QColor(37, 155, 200, 205) if self.hovered
-                         else QColor(101, 122, 134, divider_alpha))
+        is_queue_boundary = splitter_name == 'workspaceSplitter'
+        divider_thickness = 2 if is_queue_boundary else 1
+        divider_color = (QColor(37, 155, 200, 225) if self.hovered
+                         else QColor(72, 96, 109, 225)
+                         if is_queue_boundary
+                         else QColor(101, 122, 134, 145))
         if self.orientation() == Qt.Vertical:
-            divider = QRectF(0, (self.height() - 1) / 2,
-                             self.width(), 1)
+            divider = QRectF(
+                0, (self.height() - divider_thickness) / 2,
+                self.width(), divider_thickness)
         else:
-            divider = QRectF((self.width() - 1) / 2, 0,
-                             1, self.height())
+            divider = QRectF(
+                (self.width() - divider_thickness) / 2, 0,
+                divider_thickness, self.height())
         painter.fillRect(divider, divider_color)
 
         if self.orientation() == Qt.Vertical:
