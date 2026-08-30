@@ -159,6 +159,15 @@ class ImageLayeringTest(unittest.TestCase):
             (60.0, 80.0), (10.0, 50.0),
         ])
 
+    def test_obb_drag_preview_is_explicitly_closed(self):
+        self.assertTrue(Image.draft_is_closed(
+            'obb', 4, cursor=None, closed_shape=True))
+        # A transient task-state change must not make the fourth edge vanish.
+        self.assertTrue(Image.draft_is_closed(
+            'detect', 4, cursor=None, closed_shape=True))
+        self.assertFalse(Image.draft_is_closed(
+            'segment', 4, cursor=(30, 30)))
+
     def test_obb_edge_handle_resizes_only_its_axis(self):
         label = [0, 10, 20, 110, 20, 110, 80, 10, 80]
 

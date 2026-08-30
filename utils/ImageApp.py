@@ -1102,9 +1102,17 @@ class Image(QMainWindow):
             self.show(*self.center, scale=self.wheel_scale)
             self.label_show(index)
 
+    @staticmethod
+    def draft_is_closed(task, point_count, cursor=None,
+                        close_polygon=False, closed_shape=False):
+        """Return whether a draft must render as a closed polygon."""
+        return (point_count >= 3 and (
+            close_polygon or closed_shape
+            or (task == 'obb' and cursor is None and point_count == 4)))
+
     def draw_task_draft(self, points=None, cursor=None, bbox=None,
-                        pose_points=None, close_polygon=False, pixmap=None,
-                        commit=True):
+                        pose_points=None, close_polygon=False,
+                        closed_shape=False, pixmap=None, commit=True):
         """Draw an unsaved task annotation over the current canvas frame."""
         target = pixmap or self.screen_label.pixmap()
         if target is None:
@@ -1122,10 +1130,10 @@ class Image(QMainWindow):
             if cursor is not None:
                 path_points.append(QPointF(*cursor))
             if len(path_points) >= 2:
-                if close_polygon and len(canvas_points) >= 3:
+                if self.draft_is_closed(
+                        self.task, len(canvas_points), cursor,
+                        close_polygon, closed_shape):
                     painter.drawPolygon(QPolygonF(canvas_points))
-                elif self.task == 'obb' and cursor is None and len(path_points) == 4:
-                    painter.drawPolygon(QPolygonF(path_points))
                 else:
                     painter.drawPolyline(QPolygonF(path_points))
             painter.setBrush(QColor(*style['handle']))

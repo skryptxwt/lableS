@@ -258,10 +258,11 @@ class MainWin(QMainWindow):
         self._obb_save_timer.setInterval(240)
         self._obb_save_timer.timeout.connect(self._save_obb_wheel_change)
         # 高频 MouseMove 只保留最新一帧，避免整张画布重绘请求排队。
-        # 8 ms 上限约为 120 FPS，既能保持跟手，也给事件循环留出时间。
+        # 采用稳定的 60 FPS，防止大图或多标注场景下 120 FPS 占满主线程。
         self._interaction_redraw_timer = QTimer(self)
         self._interaction_redraw_timer.setSingleShot(True)
-        self._interaction_redraw_timer.setInterval(8)
+        self._interaction_redraw_timer.setTimerType(Qt.PreciseTimer)
+        self._interaction_redraw_timer.setInterval(16)
         self._interaction_redraw_timer.timeout.connect(
             self._flush_interaction_redraw)
         self._pending_interaction_redraw = None
@@ -2167,7 +2168,7 @@ class MainWin(QMainWindow):
         if self.annotation_task == 'obb':
             self.img.draw_task_draft(
                 points=[(x1, y1), (x2, y1), (x2, y2), (x1, y2)],
-                pixmap=frame, commit=False)
+                closed_shape=True, pixmap=frame, commit=False)
         else:
             self.img.draw_task_draft(
                 bbox=[x1, y1, x2, y2], pixmap=frame, commit=False)
@@ -2189,6 +2190,21 @@ class MainWin(QMainWindow):
         if pending is None or not self.img_is_load:
             return
         kind, payload = pending
+        try:
+            self._render_interaction_redraw(kind, payload)
+        except Exception as exc:
+            # Unhandled exceptions escaping a Qt timer slot can terminate the
+            # application. Recover the canvas and keep the current annotation
+            # editable instead of leaving the event loop locked.
+            self._interaction_redraw_timer.stop()
+            try:
+                self.move_xy(index=self.is_choose_rect_index)
+            except Exception:
+                pass
+            self.statusBar().showMessage(
+                f'INTERACTION RENDER RECOVERED  |  {exc}', 7000)
+
+    def _render_interaction_redraw(self, kind, payload):
         if kind in ('detect_add', 'detect_update'):
             if kind == 'detect_add':
                 self.addBox(redraw=False)
