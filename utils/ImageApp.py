@@ -42,6 +42,17 @@ class Image(QMainWindow):
         pen.setJoinStyle(Qt.RoundJoin)
         return pen
 
+    @staticmethod
+    def _annotation_font(pixel_size):
+        """Create a clean CJK-capable font for on-canvas class labels."""
+        font = QFont('Microsoft YaHei UI')
+        font.setPixelSize(max(6, int(pixel_size)))
+        font.setWeight(QFont.Medium)
+        font.setHintingPreference(QFont.PreferVerticalHinting)
+        font.setStyleStrategy(
+            QFont.PreferAntialias | QFont.PreferQuality)
+        return font
+
     def __init__(self, screen_label, img_path: str, label_path, mod=0,
                  parent=None, task=None, kpt_shape=(17, 3)):
         super().__init__()
@@ -194,10 +205,7 @@ class Image(QMainWindow):
             for point in self.circle_nine(*x1y1, *x2y2):
                 painter.drawEllipse(QPointF(*point), radius, radius)
 
-        font = QFont("Arial")
-        font.setPixelSize(max(6, int(text_size)))
-        font.setBold(True)
-        painter.setFont(font)
+        painter.setFont(self._annotation_font(text_size))
         if self.show_box_text:
             painter.setPen(QColor(*(text_color or border_color)))
             metrics = painter.fontMetrics()
@@ -481,14 +489,12 @@ class Image(QMainWindow):
                 painter.drawEllipse(handle, 5, 5)
 
         if self.show_box_text and points:
-            font = QFont('Arial')
-            font.setPixelSize(max(6, int(style['text_size'])))
-            font.setBold(True)
-            painter.setFont(font)
+            painter.setFont(self._annotation_font(style['text_size']))
             painter.setPen(QColor(*style['text']))
             anchor = min(points, key=lambda point: (point.y(), point.x()))
             painter.drawText(
-                QPointF(anchor.x(), max(12, anchor.y() - 6)), text)
+                QPointF(round(anchor.x()),
+                        round(max(12, anchor.y() - 6))), text)
 
     def _paint_pose(self, painter, label, style, selected=False):
         cls, x1, y1, x2, y2, *raw_points = label

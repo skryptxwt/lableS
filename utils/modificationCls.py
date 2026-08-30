@@ -107,9 +107,12 @@ class ClassStylePreview(QWidget):
             painter.drawRoundedRect(
                 QRectF(point.x() - 4, point.y() - 4, 8, 8), 1.5, 1.5)
 
-        text_font = QFont('Arial')
+        text_font = QFont('Microsoft YaHei UI')
         text_font.setPixelSize(self.text_size)
-        text_font.setBold(True)
+        text_font.setWeight(QFont.Medium)
+        text_font.setHintingPreference(QFont.PreferVerticalHinting)
+        text_font.setStyleStrategy(
+            QFont.PreferAntialias | QFont.PreferQuality)
         painter.setFont(text_font)
         painter.setPen(QColor(*self.text))
         text_height = painter.fontMetrics().height() + 4

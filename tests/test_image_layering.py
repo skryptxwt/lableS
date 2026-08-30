@@ -50,6 +50,15 @@ class ImageLayeringTest(unittest.TestCase):
         self.assertEqual(pen.capStyle(), Qt.RoundCap)
         self.assertEqual(pen.joinStyle(), Qt.RoundJoin)
 
+    def test_annotation_font_uses_quality_cjk_rendering(self):
+        font = Image._annotation_font(13)
+
+        self.assertEqual(font.family(), 'Microsoft YaHei UI')
+        self.assertEqual(font.pixelSize(), 13)
+        self.assertEqual(font.weight(), font.Medium)
+        self.assertTrue(font.styleStrategy() & font.PreferAntialias)
+        self.assertTrue(font.styleStrategy() & font.PreferQuality)
+
     def test_selected_box_is_painted_on_top(self):
         self.assertEqual(Image._paint_order(3, 0), [1, 2, 0])
 
