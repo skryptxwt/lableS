@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import math
 import yaml
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from PyQt5.QtWidgets import (QMainWindow, QFileDialog, QListWidget, QMessageBox,
                              QAbstractItemView, QSizePolicy, QMenu,
                              QWidgetAction, QLabel, QSlider, QHBoxLayout,
                              QApplication, QDialog, QDialogButtonBox,
-                             QKeySequenceEdit)
+                             QKeySequenceEdit, QActionGroup, QLineEdit)
 
 from .CategoryApp import CategoryApp
 from .tempCatewidget import CategoryApp as tempWidget
@@ -42,6 +43,17 @@ DEFAULT_SHORTCUTS = {
     'reset_view': ('重置画布', '0'),
     'save_labels': ('保存标签', 'Ctrl+S'),
 }
+
+COCO_KEYPOINT_NAMES = (
+    '鼻子', '左眼', '右眼', '左耳', '右耳', '左肩', '右肩',
+    '左肘', '右肘', '左腕', '右腕', '左髋', '右髋', '左膝',
+    '右膝', '左踝', '右踝',
+)
+COCO_KEYPOINT_SKELETON = (
+    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+    (5, 11), (6, 12), (11, 12), (11, 13), (13, 15),
+    (12, 14), (14, 16), (0, 1), (0, 2), (1, 3), (2, 4),
+)
 
 
 class MainWin(QMainWindow):
@@ -170,6 +182,15 @@ class MainWin(QMainWindow):
 
         self.img_is_load = False  # 图片是否加载
         self.img = None  # 当前操作的图片
+        self.annotation_task = 'detect'
+        self.kpt_shape = (17, 3)
+        self.keypoint_names = list(COCO_KEYPOINT_NAMES)
+        self.kpt_skeleton = list(COCO_KEYPOINT_SKELETON)
+        self.task_draft_points = []
+        self.task_pose_bbox = None
+        self.task_pose_points = []
+        self.task_drag = None
+        self.task_edit = None
 
         self.is_update_label = False  # 是否正在更新框的label
         self.is_update_label_save = None  # 保存更新框的label的信息 [box_index, img.label_save[index], img.basedata[index]]
@@ -348,6 +369,33 @@ class MainWin(QMainWindow):
         self.background_button.clicked.connect(self.show_background_menu)
         self.ui.horizontalLayout_6.insertWidget(4, self.background_button, 0, Qt.AlignVCenter)
 
+        self.task_button = QPushButton('任务：检测  ▾', self)
+        self.task_button.setObjectName('taskButton')
+        self.task_button.setFixedSize(88, 24)
+        self.task_button.setProperty('toolbarControl', True)
+        self.task_button.setToolTip('选择 YOLO 标注任务')
+        self.task_button.clicked.connect(self.show_task_menu)
+        self.task_menu = QMenu(self)
+        self.task_menu.setObjectName('taskMenu')
+        self.task_action_group = QActionGroup(self)
+        self.task_action_group.setExclusive(True)
+        self.task_actions = {}
+        for task, label in (
+                ('detect', '检测框'), ('segment', '实例分割'),
+                ('obb', 'OBB 旋转框'), ('pose', '关键点')):
+            action = self.task_menu.addAction(label)
+            action.setCheckable(True)
+            action.setData(task)
+            action.triggered.connect(
+                lambda _checked=False, value=task: self.set_annotation_task(value))
+            self.task_action_group.addAction(action)
+            self.task_actions[task] = action
+        self.task_actions['detect'].setChecked(True)
+        self.task_menu.addSeparator()
+        self.keypoint_config_action = self.task_menu.addAction('关键点配置…')
+        self.keypoint_config_action.triggered.connect(
+            self.configure_keypoints)
+
         self.background_menu = QMenu(self)
         self.background_menu.setObjectName('backgroundMenu')
         self.background_import_action = self.background_menu.addAction(
@@ -427,6 +475,9 @@ class MainWin(QMainWindow):
         self.model_import_action = self.model_menu.addAction(
             toolbar_icon('import'), '导入模型')
         self.model_import_action.triggered.connect(self.load_model_)
+        self.model_run_action = self.model_menu.addAction(
+            toolbar_icon('cursor'), '执行当前模型')
+        self.model_run_action.triggered.connect(self.detect_)
         self.model_menu.addSeparator()
 
         confidence_widget = QWidget(self.model_menu)
@@ -522,6 +573,7 @@ class MainWin(QMainWindow):
             self.ui.renewCls: 66,
             self.ui.load_model: 82,
             self.ui.save_5: 78,
+            self.task_button: 88,
         }
         for button, width in top_button_widths.items():
             button.setFixedSize(width, 24)
@@ -530,6 +582,7 @@ class MainWin(QMainWindow):
 
         self.title_bar.add_toolbar_widgets(
             self.ui.renewCls,
+            self.task_button,
             self.ui.load_model,
             self.background_button,
             self.ui.save_5,
@@ -747,6 +800,158 @@ class MainWin(QMainWindow):
             self.background_button.rect().bottomLeft())
         position.setY(position.y() + 5)
         self.background_menu.popup(position)
+
+    def show_task_menu(self):
+        position = self.task_button.mapToGlobal(
+            self.task_button.rect().bottomLeft())
+        position.setY(position.y() + 5)
+        self.task_menu.popup(position)
+
+    def set_annotation_task(self, task, persist=True, reload_image=True):
+        labels = {
+            'detect': '检测', 'segment': '分割',
+            'obb': 'OBB', 'pose': '关键点',
+        }
+        if task not in labels:
+            return False
+        if (reload_image and self.img_is_load and self.img
+                and self.img.label_save and task != self.annotation_task):
+            QMessageBox.warning(
+                self, '无法切换任务',
+                '当前图片已有标注。不同 YOLO 任务的标签格式不兼容，'
+                '请切换到空白数据集或清空当前标注后再切换。')
+            self.task_actions[self.annotation_task].setChecked(True)
+            return False
+
+        previous_image = self.img.img_path if self.img_is_load and self.img else None
+        previous_label = self.img.label_path if self.img_is_load and self.img else None
+        self.annotation_task = task
+        self.task_button.setText(f'任务：{labels[task]}  ▾')
+        self.task_actions[task].setChecked(True)
+        self._reset_task_interaction()
+        if persist:
+            self._save_background_config(
+                annotation_task=task, kpt_shape=list(self.kpt_shape))
+        if reload_image and previous_image is not None:
+            if self.init_image(previous_image, previous_label):
+                self.boxShowWidget.set_rect_box()
+        hints = {
+            'detect': '拖动绘制检测框',
+            'segment': '逐点单击绘制多边形，双击或 Enter 闭合，Backspace 撤销点',
+            'obb': '拖动绘制旋转框；选中后拖动上方圆点旋转',
+            'pose': f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；右键记为缺失',
+        }
+        self.statusBar().showMessage(
+            f'TASK {labels[task].upper()}  |  {hints[task]}')
+        return True
+
+    def _reset_task_interaction(self):
+        self.task_draft_points = []
+        self.task_pose_bbox = None
+        self.task_pose_points = []
+        self.task_drag = None
+        self.task_edit = None
+        self.is_add_box = False
+        self.is_update_label = False
+        self.is_choose_rect = False
+        self.is_choose_rect_index = None
+
+    def configure_keypoints(self):
+        dialog = QDialog(self)
+        dialog.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        dialog.setWindowTitle('关键点配置')
+        dialog.setMinimumWidth(520)
+        dialog.setStyleSheet(INDUSTRIAL_QSS)
+        outer_layout = QVBoxLayout(dialog)
+        outer_layout.setContentsMargins(1, 1, 1, 1)
+        outer_layout.setSpacing(0)
+        title_bar = TitleBar(dialog)
+        title_bar.title_label.setText('关键点配置')
+        title_bar.minimize_button.hide()
+        title_bar.maximize_button.hide()
+        outer_layout.addWidget(title_bar)
+        content = QWidget(dialog)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(9)
+        outer_layout.addWidget(content)
+
+        shape_row = QWidget(dialog)
+        shape_layout = QHBoxLayout(shape_row)
+        shape_layout.setContentsMargins(0, 0, 0, 0)
+        count_spin = QSpinBox(shape_row)
+        count_spin.setRange(1, 100)
+        count_spin.setValue(self.kpt_shape[0])
+        dimensions_combo = QComboBox(shape_row)
+        dimensions_combo.addItem('x, y', 2)
+        dimensions_combo.addItem('x, y, 可见性', 3)
+        dimensions_combo.setCurrentIndex(
+            dimensions_combo.findData(self.kpt_shape[1]))
+        shape_layout.addWidget(QLabel('关键点数量', shape_row))
+        shape_layout.addWidget(count_spin)
+        shape_layout.addSpacing(18)
+        shape_layout.addWidget(QLabel('每点维度', shape_row))
+        shape_layout.addWidget(dimensions_combo, 1)
+        layout.addWidget(shape_row)
+
+        layout.addWidget(QLabel('关键点名称（使用逗号分隔）', dialog))
+        names_edit = QLineEdit(', '.join(self.keypoint_names), dialog)
+        layout.addWidget(names_edit)
+        layout.addWidget(QLabel('骨架连接（例如 0-1, 1-2）', dialog))
+        skeleton_edit = QLineEdit(
+            ', '.join(f'{start}-{end}' for start, end in self.kpt_skeleton),
+            dialog)
+        layout.addWidget(skeleton_edit)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Cancel | QDialogButtonBox.Ok, parent=dialog)
+        buttons.button(QDialogButtonBox.Ok).setText('确认')
+        buttons.button(QDialogButtonBox.Cancel).setText('取消')
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        count = count_spin.value()
+        dimensions = int(dimensions_combo.currentData())
+        if (self.annotation_task == 'pose' and self.img_is_load
+                and self.img.label_save
+                and (count, dimensions) != self.kpt_shape):
+            QMessageBox.warning(
+                self, '无法修改关键点结构',
+                '当前图片已有 Pose 标注，修改关键点数量会破坏标签格式。')
+            return
+        names = [name.strip() for name in names_edit.text().split(',')
+                 if name.strip()]
+        names = (names + [f'点 {index + 1}' for index in range(len(names), count)])[:count]
+        skeleton = []
+        for item in skeleton_edit.text().split(','):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                start, end = (int(value.strip()) for value in item.split('-', 1))
+            except (ValueError, TypeError):
+                continue
+            if 0 <= start < count and 0 <= end < count and start != end:
+                skeleton.append((start, end))
+        self.kpt_shape = (count, dimensions)
+        self.keypoint_names = names
+        self.kpt_skeleton = skeleton
+        self._save_background_config(
+            kpt_shape=list(self.kpt_shape),
+            keypoint_names=list(self.keypoint_names),
+            kpt_skeleton=[list(edge) for edge in self.kpt_skeleton])
+        if self.annotation_task == 'pose' and self.img_is_load:
+            self.init_image(self.img.img_path, self.img.label_path)
+        self.statusBar().showMessage(
+            f'POSE CONFIG  |  {count} KEYPOINTS × {dimensions} DIMENSIONS')
+
+    def _pose_point_name(self, index):
+        if 0 <= index < len(self.keypoint_names):
+            return self.keypoint_names[index]
+        return f'点 {index + 1}'
 
     def show_model_menu(self):
         position = self.load_model.mapToGlobal(
@@ -1029,6 +1234,41 @@ class MainWin(QMainWindow):
             self.thumbnail_size_slider.setValue(thumbnail_size)
             self.update_thumbnail_size(thumbnail_size)
             self._apply_shortcut_configuration(data)
+            raw_shape = data.get('kpt_shape', [17, 3])
+            try:
+                count, dimensions = int(raw_shape[0]), int(raw_shape[1])
+                if count < 1 or dimensions not in (2, 3):
+                    raise ValueError
+                self.kpt_shape = (count, dimensions)
+            except (TypeError, ValueError, IndexError):
+                self.kpt_shape = (17, 3)
+            configured_names = data.get('keypoint_names')
+            if isinstance(configured_names, list):
+                self.keypoint_names = [str(name) for name in configured_names]
+            else:
+                self.keypoint_names = list(COCO_KEYPOINT_NAMES)
+            count = self.kpt_shape[0]
+            self.keypoint_names = (
+                self.keypoint_names
+                + [f'点 {index + 1}' for index in range(
+                    len(self.keypoint_names), count)])[:count]
+            configured_skeleton = data.get('kpt_skeleton')
+            if isinstance(configured_skeleton, list):
+                self.kpt_skeleton = []
+                for edge in configured_skeleton:
+                    try:
+                        start, end = int(edge[0]), int(edge[1])
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    if 0 <= start < count and 0 <= end < count and start != end:
+                        self.kpt_skeleton.append((start, end))
+            else:
+                self.kpt_skeleton = [
+                    edge for edge in COCO_KEYPOINT_SKELETON
+                    if edge[0] < count and edge[1] < count]
+            self.set_annotation_task(
+                data.get('annotation_task', 'detect'),
+                persist=False, reload_image=False)
             if background_path and Path(background_path).is_file():
                 self.window_shell.set_background_image(background_path)
 
@@ -1076,12 +1316,24 @@ class MainWin(QMainWindow):
             img_name = Path(img_path).stem
             candidate = self.default_save_path / f'{img_name}.txt'
             p = candidate if candidate.exists() else None
-            self.init_image(img_path, p)
-            self.categoryShowWidget.init()
+            if self.init_image(img_path, p):
+                self.categoryShowWidget.init()
 
     # 从本地加载图片，有标签就添加标签
     def init_image(self, img_path, label_path):
-        self.img = Image(self.label, img_path, label_path, parent=self)
+        try:
+            image = Image(
+                self.label, img_path, label_path, parent=self,
+                task=self.annotation_task, kpt_shape=self.kpt_shape)
+        except (OSError, ValueError) as exc:
+            self.img_is_load = False
+            self.label.clear()
+            self.label.setText(
+                'LABEL FORMAT DOES NOT MATCH CURRENT TASK\n\n'
+                'SWITCH TASK MODE AND OPEN THE IMAGE AGAIN')
+            QMessageBox.warning(self, '标签格式不匹配', str(exc))
+            return False
+        self.img = image
 
         self.img.show_box_circle = self.show_box_circle.isChecked()
         self.img.show_other = self.show_other.isChecked()
@@ -1091,6 +1343,7 @@ class MainWin(QMainWindow):
         self.img_is_load = True
         self.statusBar().showMessage(
             f'IMAGE READY  |  {Path(img_path).name}  |  {len(self.img.label_save)} OBJECTS')
+        return True
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1159,6 +1412,24 @@ class MainWin(QMainWindow):
     def eventFilter(self, source, event):
         if self.change_label_name:
             return True
+        task_mouse_events = (
+            QEvent.MouseMove, QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick,
+        )
+        if (self.img_is_load and self.annotation_task != 'detect'
+                and source is self.label
+                and event.type() in task_mouse_events):
+            if (event.type() == QEvent.MouseButtonPress
+                    and event.button() == Qt.MiddleButton):
+                if self.arrows:
+                    self.hand_button_()
+                else:
+                    self.arrows_button_()
+                return True
+            if self.hand:
+                return self._task_hand_event_filter(event)
+            if self.arrows:
+                return self._task_event_filter(event)
         # 鼠标移动事件
         if event.type() == QEvent.MouseMove:
             # Mouse events are local to their source widget.  Convert them to
@@ -1320,6 +1591,327 @@ class MainWin(QMainWindow):
 
         return super().eventFilter(source, event)
 
+    def _task_hand_event_filter(self, event):
+        position = self._event_canvas_pos(self.label, event)
+        self.mouse_pos = list(position)
+        if (event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton):
+            self.mouse_left_press = True
+            self.mouse_save_temp = list(position)
+            self.hand_flag = True
+            self.setCursor(Qt.ClosedHandCursor)
+        elif event.type() == QEvent.MouseMove and self.mouse_left_press:
+            self.moveImage()
+        elif (event.type() == QEvent.MouseButtonRelease
+              and event.button() == Qt.LeftButton):
+            self.mouse_left_press = False
+            self.hand_flag = False
+            self.setCursor(Qt.OpenHandCursor)
+        return True
+
+    def _task_event_filter(self, event):
+        """Mouse interaction for segment, OBB and pose annotations."""
+        position = self._event_canvas_pos(self.label, event)
+        self.mouse_pos = list(position)
+
+        if event.type() == QEvent.MouseButtonDblClick:
+            if (event.button() == Qt.LeftButton
+                    and self.annotation_task == 'segment'):
+                self._finish_segment()
+                return True
+
+        if event.type() == QEvent.MouseButtonPress:
+            if event.button() == Qt.RightButton:
+                if self.annotation_task == 'segment' and self.task_draft_points:
+                    self._finish_segment()
+                elif self.annotation_task == 'pose' and self.task_pose_bbox:
+                    self._append_pose_point(None, visibility=0)
+                elif self.is_choose_rect:
+                    self.deleteBox_()
+                return True
+            if event.button() != Qt.LeftButton or not self.pos_in_org(position):
+                return True
+
+            if self.annotation_task == 'segment':
+                if self.task_draft_points:
+                    self.task_draft_points.append(
+                        self.img.new_xy_to_org_xy(position))
+                    self._redraw_task_draft(cursor=position)
+                    return True
+                hit = self.img.task_hit_test(*position)
+                if hit[0] is None:
+                    self._clear_task_selection()
+                    self.task_draft_points = [
+                        self.img.new_xy_to_org_xy(position)]
+                    self._redraw_task_draft(cursor=position)
+                else:
+                    self._begin_task_edit(hit, position)
+                return True
+
+            if self.annotation_task == 'pose' and self.task_pose_bbox:
+                visibility = 1 if event.modifiers() & Qt.ShiftModifier else 2
+                self._append_pose_point(position, visibility)
+                return True
+
+            hit = self.img.task_hit_test(*position)
+            if hit[0] is not None:
+                self._begin_task_edit(hit, position)
+            else:
+                self._clear_task_selection()
+                self.task_drag = {
+                    'start': tuple(position), 'current': tuple(position)}
+                self.mouse_left_press = True
+            return True
+
+        if event.type() == QEvent.MouseMove:
+            if self.annotation_task == 'segment' and self.task_draft_points:
+                self._redraw_task_draft(cursor=position)
+                return True
+            if self.task_edit is not None and self.mouse_left_press:
+                self._update_task_edit(position)
+                return True
+            if self.task_drag is not None and self.mouse_left_press:
+                self.task_drag['current'] = tuple(self.limit_xy(*position))
+                self._redraw_task_drag()
+                return True
+            hit = self.img.task_hit_test(*position)
+            self.setCursor(
+                Qt.SizeAllCursor if hit[0] == 'shape'
+                else Qt.CrossCursor if hit[0] in (
+                    'vertex', 'bbox_vertex', 'keypoint', 'rotate')
+                else Qt.ArrowCursor)
+            return True
+
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self.task_edit is not None:
+                self.img.save()
+                self.task_edit = None
+                self.mouse_left_press = False
+                return True
+            if self.task_drag is not None:
+                start = self.task_drag['start']
+                end = tuple(self.limit_xy(*position))
+                self.task_drag = None
+                self.mouse_left_press = False
+                if distance(start, end) < 12:
+                    self._redraw_task_draft()
+                    return True
+                self._finish_task_box_drag(start, end)
+                return True
+        return True
+
+    def _clear_task_selection(self):
+        if self.img_is_load:
+            self.img.only_index = False
+        self.is_choose_rect = False
+        self.is_choose_rect_index = None
+        self.is_hover_move_allow = False
+        self.rect_save_current = None
+        self.boxShowWidget.clear()
+        self.categoryShowWidget.clear()
+
+    def _select_task_annotation(self, index):
+        self.is_choose_rect = True
+        self.is_choose_rect_index = index
+        self.rect_save_current = [index, -1, self.img.label_save[index]]
+        self.boxShowWidget.set_rect_box(index)
+        self.categoryShowWidget.set_rect_cls(
+            self.img.label_save[index][0], index)
+        self.move_xy(index=index)
+
+    def _begin_task_edit(self, hit, position):
+        kind, index, control = hit
+        self._select_task_annotation(index)
+        self.task_edit = {
+            'kind': kind, 'index': index, 'control': control,
+            'start_canvas': tuple(position),
+            'start_org': self.img.new_xy_to_org_xy(position),
+            'original': list(self.img.label_save[index]),
+        }
+        self.mouse_left_press = True
+
+    def _update_task_edit(self, position):
+        edit = self.task_edit
+        label = list(edit['original'])
+        current_org = self.img.new_xy_to_org_xy(position)
+        dx = current_org[0] - edit['start_org'][0]
+        dy = current_org[1] - edit['start_org'][1]
+        kind = edit['kind']
+        if kind == 'shape':
+            if self.annotation_task == 'pose':
+                dimensions = self.kpt_shape[1]
+                for offset in (1, 3):
+                    label[offset] += dx
+                    label[offset + 1] += dy
+                for offset in range(5, len(label), dimensions):
+                    if dimensions == 3 and int(label[offset + 2]) == 0:
+                        continue
+                    label[offset] += dx
+                    label[offset + 1] += dy
+            else:
+                for offset in range(1, len(label), 2):
+                    label[offset] += dx
+                    label[offset + 1] += dy
+        elif kind == 'vertex':
+            if self.annotation_task == 'obb':
+                points = [label[offset:offset + 2]
+                          for offset in range(1, len(label), 2)]
+                corner = edit['control']
+                opposite = (corner + 2) % 4
+                next_corner = (corner + 1) % 4
+                previous_corner = (corner - 1) % 4
+                origin = points[opposite]
+
+                def unit(point):
+                    vx, vy = point[0] - origin[0], point[1] - origin[1]
+                    length = math.hypot(vx, vy) or 1.0
+                    return vx / length, vy / length
+
+                axis_next = unit(points[next_corner])
+                axis_previous = unit(points[previous_corner])
+                delta = (current_org[0] - origin[0],
+                         current_org[1] - origin[1])
+                next_length = (delta[0] * axis_next[0]
+                               + delta[1] * axis_next[1])
+                previous_length = (delta[0] * axis_previous[0]
+                                   + delta[1] * axis_previous[1])
+                points[next_corner] = [
+                    origin[0] + axis_next[0] * next_length,
+                    origin[1] + axis_next[1] * next_length]
+                points[previous_corner] = [
+                    origin[0] + axis_previous[0] * previous_length,
+                    origin[1] + axis_previous[1] * previous_length]
+                points[corner] = [
+                    points[next_corner][0] + points[previous_corner][0] - origin[0],
+                    points[next_corner][1] + points[previous_corner][1] - origin[1]]
+                label = [label[0], *(value for point in points for value in point)]
+            else:
+                offset = 1 + edit['control'] * 2
+                label[offset:offset + 2] = current_org
+        elif kind == 'bbox_vertex':
+            corner = edit['control']
+            if corner == 0:
+                label[1:3] = current_org
+            elif corner == 1:
+                label[3], label[2] = current_org
+            elif corner == 2:
+                label[3:5] = current_org
+            else:
+                label[1], label[4] = current_org
+            label[1], label[3] = sorted((label[1], label[3]))
+            label[2], label[4] = sorted((label[2], label[4]))
+        elif kind == 'keypoint':
+            dimensions = self.kpt_shape[1]
+            offset = 5 + edit['control'] * dimensions
+            label[offset:offset + 2] = current_org
+            if dimensions == 3 and label[offset + 2] == 0:
+                label[offset + 2] = 2
+        elif kind == 'rotate':
+            points = [label[offset:offset + 2]
+                      for offset in range(1, len(label), 2)]
+            center_x = sum(point[0] for point in points) / 4
+            center_y = sum(point[1] for point in points) / 4
+            start_angle = math.atan2(
+                edit['start_org'][1] - center_y,
+                edit['start_org'][0] - center_x)
+            current_angle = math.atan2(
+                current_org[1] - center_y, current_org[0] - center_x)
+            angle = current_angle - start_angle
+            cosine, sine = math.cos(angle), math.sin(angle)
+            rotated = []
+            for point in points:
+                px, py = point[0] - center_x, point[1] - center_y
+                rotated.extend((center_x + px * cosine - py * sine,
+                                center_y + px * sine + py * cosine))
+            label = [label[0], *rotated]
+        self.img.change_annotation(edit['index'], label)
+        self.rect_save_current = [edit['index'], -1,
+                                  self.img.label_save[edit['index']]]
+
+    def _finish_task_box_drag(self, start, end):
+        x1, y1 = self.img.new_xy_to_org_xy(start)
+        x2, y2 = self.img.new_xy_to_org_xy(end)
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
+        if self.annotation_task == 'obb':
+            label = [self.cls, x1, y1, x2, y1, x2, y2, x1, y2]
+            index = self.img.append_annotation(label)
+            self.img.save()
+            self._select_task_annotation(index)
+        else:
+            self.task_pose_bbox = [x1, y1, x2, y2]
+            self.task_pose_points = []
+            self._redraw_task_draft()
+            self.statusBar().showMessage(
+                f'POSE  |  1 / {self.kpt_shape[0]}  '
+                f'{self._pose_point_name(0)}  '
+                '|  Shift+左键=遮挡，右键=缺失')
+
+    def _finish_segment(self):
+        if len(self.task_draft_points) < 3:
+            self.statusBar().showMessage('SEGMENT  |  至少需要 3 个顶点')
+            return
+        label = [self.cls]
+        for point in self.task_draft_points:
+            label.extend(point)
+        self.task_draft_points = []
+        index = self.img.append_annotation(label)
+        self.img.save()
+        self._select_task_annotation(index)
+
+    def _append_pose_point(self, position, visibility=2):
+        dimensions = self.kpt_shape[1]
+        if position is None:
+            point = (0.0, 0.0)
+        else:
+            point = self.img.new_xy_to_org_xy(position)
+        entry = [point[0], point[1]]
+        if dimensions == 3:
+            entry.append(int(visibility))
+        self.task_pose_points.append(entry)
+        count = len(self.task_pose_points)
+        if count >= self.kpt_shape[0]:
+            label = [self.cls, *self.task_pose_bbox]
+            for keypoint in self.task_pose_points:
+                label.extend(keypoint)
+            self.task_pose_bbox = None
+            self.task_pose_points = []
+            index = self.img.append_annotation(label)
+            self.img.save()
+            self._select_task_annotation(index)
+            self.statusBar().showMessage('POSE  |  关键点标注已保存')
+        else:
+            self._redraw_task_draft()
+            self.statusBar().showMessage(
+                f'POSE  |  {count + 1} / {self.kpt_shape[0]}  '
+                f'{self._pose_point_name(count)}  '
+                '|  Shift+左键=遮挡，右键=缺失')
+
+    def _redraw_task_drag(self):
+        self.img.show(*self.img.center, scale=self.wheel_scale)
+        self.img.label_show(self.is_choose_rect_index)
+        start = self.img.new_xy_to_org_xy(self.task_drag['start'])
+        end = self.img.new_xy_to_org_xy(self.task_drag['current'])
+        x1, x2 = sorted((start[0], end[0]))
+        y1, y2 = sorted((start[1], end[1]))
+        if self.annotation_task == 'obb':
+            self.img.draw_task_draft(
+                points=[(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+        else:
+            self.img.draw_task_draft(bbox=[x1, y1, x2, y2])
+
+    def _redraw_task_draft(self, cursor=None):
+        if not self.img_is_load:
+            return
+        self.img.show(*self.img.center, scale=self.wheel_scale)
+        self.img.label_show(self.is_choose_rect_index)
+        self.img.draw_task_draft(
+            points=self.task_draft_points,
+            cursor=cursor,
+            bbox=self.task_pose_bbox,
+            pose_points=[point[:2] for point in self.task_pose_points
+                         if len(point) < 3 or point[2] != 0])
+
     # ———————————————————————————————— 键盘事件 ————————————————————————————————#
 
     def keyReleaseEvent(self, event):
@@ -1332,6 +1924,34 @@ class MainWin(QMainWindow):
             self._sync_tool_mode_buttons()
 
     def keyPressEvent(self, event):
+        if self.img_is_load and self.annotation_task != 'detect':
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if self.annotation_task == 'segment' and self.task_draft_points:
+                    self._finish_segment()
+                    event.accept()
+                    return
+            if event.key() == Qt.Key_Backspace:
+                if self.annotation_task == 'segment' and self.task_draft_points:
+                    self.task_draft_points.pop()
+                    self._redraw_task_draft()
+                    event.accept()
+                    return
+                if self.annotation_task == 'pose' and self.task_pose_points:
+                    self.task_pose_points.pop()
+                    self._redraw_task_draft()
+                    event.accept()
+                    return
+            if event.key() == Qt.Key_Escape:
+                self.task_draft_points = []
+                self.task_pose_bbox = None
+                self.task_pose_points = []
+                self.task_drag = None
+                self.task_edit = None
+                self.mouse_left_press = False
+                self.move_xy(index=self.is_choose_rect_index)
+                self.statusBar().showMessage('ANNOTATION CANCELLED')
+                event.accept()
+                return
         if self.img_is_load and event.modifiers() & Qt.ControlModifier:
             # Ctrl键被按下 event.modifiers()是一个int类型的值, 用来判断Ctrl键是否被按下
             self.temp_hand, self.key_press, self.hand = True, True, True
@@ -1640,13 +2260,15 @@ class MainWin(QMainWindow):
             self.init(img_path=self.thumbnail_widget.show_list[self.thumbnail_widget.index])
             self.statusBar().showMessage(f'LABEL IMPORT COMPLETE  |  {imported} FILES')
 
-    @staticmethod
-    def _merge_label_file(source, destination):
-        incoming = DataApp(source)
+    def _merge_label_file(self, source, destination):
+        incoming = DataApp(
+            source, task=self.annotation_task, kpt_shape=self.kpt_shape)
         if not destination.exists():
             shutil.copy2(source, destination)
             return
-        existing = DataApp(destination)
+        existing = DataApp(
+            destination, task=self.annotation_task,
+            kpt_shape=self.kpt_shape)
         existing.merge(incoming)
         existing.save()
 
@@ -1816,6 +2438,31 @@ class MainWin(QMainWindow):
 
     def _model_loaded(self, model):
         self.yolov8_model = model
+        model_task = getattr(model, 'task', None)
+        if model_task == 'pose':
+            model_core = getattr(model, 'model', None)
+            model_shape = getattr(model_core, 'kpt_shape', None)
+            if model_shape is None and hasattr(model_core, 'yaml'):
+                model_shape = model_core.yaml.get('kpt_shape')
+            try:
+                count, dimensions = int(model_shape[0]), int(model_shape[1])
+                if count > 0 and dimensions in (2, 3):
+                    self.kpt_shape = (count, dimensions)
+                    self.keypoint_names = (
+                        self.keypoint_names
+                        + [f'点 {index + 1}' for index in range(
+                            len(self.keypoint_names), count)])[:count]
+                    self.kpt_skeleton = [
+                        edge for edge in self.kpt_skeleton
+                        if edge[0] < count and edge[1] < count]
+                    self._save_background_config(
+                        kpt_shape=list(self.kpt_shape),
+                        keypoint_names=list(self.keypoint_names),
+                        kpt_skeleton=[list(edge) for edge in self.kpt_skeleton])
+            except (TypeError, ValueError, IndexError):
+                pass
+        if model_task in ('detect', 'segment', 'obb', 'pose'):
+            self.set_annotation_task(model_task)
         self.statusBar().showMessage('MODEL READY  |  可以执行 AI 检测')
         self.show_prompt('模型加载完成')
 
@@ -1840,19 +2487,32 @@ class MainWin(QMainWindow):
                 self.statusBar().showMessage(
                     f'INFERENCE RUNNING  |  {Path(self.img.img_path).name}  |  CONF {self.conf:.2f}')
                 self._detect_target = self.img
-                self.detect_thread = DetectModel(self.yolov8_model, self.img.org_img.copy(), self.conf)
+                self.detect_thread = DetectModel(
+                    self.yolov8_model, self.img.org_img.copy(), self.conf,
+                    task=self.annotation_task, kpt_shape=self.kpt_shape)
                 self.detect_thread.signal_detection_finished.connect(self._detection_finished)
                 self.detect_thread.signal_error.connect(self._worker_error)
                 self.detect_thread.finished.connect(lambda: self.detect.setEnabled(True))
                 self.detect_thread.start()
 
     def _detection_finished(self, detection):
-        boxes, classes = detection
         target = self._detect_target
         if target is None:
             return
-        for class_id, box in zip(classes, boxes):
-            target.basedata.append([int(class_id), *box])
+        task = detection.get('task', self.annotation_task)
+        annotations = detection.get('annotations', [])
+        if task != self.annotation_task:
+            self._worker_error(
+                f'模型任务为 {task}，当前工作台任务为 {self.annotation_task}')
+            return
+        try:
+            for annotation in annotations:
+                target.basedata._validate(annotation)
+        except (TypeError, ValueError) as exc:
+            self._worker_error(f'模型输出与当前任务配置不兼容: {exc}')
+            return
+        for annotation in annotations:
+            target.basedata.append(annotation)
         target.save()
         if self.img is target:
             target.label_save = []
@@ -1860,7 +2520,7 @@ class MainWin(QMainWindow):
             self.move_xy()
             self.boxShowWidget.clear()
         self.statusBar().showMessage(
-            f'INFERENCE COMPLETE  |  {Path(target.img_path).name}  |  {len(boxes)} OBJECTS ADDED')
+            f'INFERENCE COMPLETE  |  {Path(target.img_path).name}  |  {len(annotations)} OBJECTS ADDED')
 
     def save_(self):
         # 选择获取文件夹路径

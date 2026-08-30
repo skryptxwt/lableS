@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from PyQt5.QtCore import QPointF
 
 from utils.ImageApp import Image
 
@@ -52,6 +53,28 @@ class ImageLayeringTest(unittest.TestCase):
             [1, 150, 50, 260, 160],
         ], selected=0, selected_only=True)
         self.assertEqual(image.hit_test(180, 80), ('rect', 1, -1))
+
+    def test_obb_rotation_handle_is_outside_top_edge(self):
+        points = [QPointF(10, 20), QPointF(110, 20),
+                  QPointF(110, 80), QPointF(10, 80)]
+
+        handle = Image.obb_rotation_handle(points)
+
+        self.assertAlmostEqual(handle.x(), 60)
+        self.assertLess(handle.y(), 20)
+
+    def test_task_hit_test_prefers_latest_overlapping_polygon(self):
+        image = SimpleNamespace(
+            task='segment',
+            label_save=[
+                [0, 10, 10, 100, 10, 100, 100, 10, 100],
+                [1, 40, 40, 130, 40, 130, 130, 40, 130],
+            ],
+            org_xy_to_new_xy=lambda point: point,
+        )
+
+        self.assertEqual(
+            Image.task_hit_test(image, 70, 70), ('shape', 1, -1))
 
 
 if __name__ == '__main__':

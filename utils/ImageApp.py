@@ -4,9 +4,10 @@ import cv2
 import math
 import numpy as np
 from PyQt5 import QtGui
-from PyQt5.QtCore import QPoint, QRect, Qt
+from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt
 from PyQt5.QtWidgets import QMainWindow
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QPen
+from PyQt5.QtGui import (QPixmap, QImage, QPainter, QColor, QFont, QPen,
+                         QPolygonF)
 
 from .common_fun import read_img
 from .DataApp import DataApp
@@ -20,16 +21,24 @@ def normalize_color(value, default=(0, 255, 0, 50)):
 
 class Image(QMainWindow):
 
-    def __init__(self, screen_label, img_path: str, label_path, mod=0, parent=None):
+    TASK_MODES = {'detect': 0, 'segment': 1, 'pose': 2, 'obb': 3}
+
+    def __init__(self, screen_label, img_path: str, label_path, mod=0,
+                 parent=None, task=None, kpt_shape=(17, 3)):
         super().__init__()
         if not label_path:
             label_path = Path(parent.default_save_path) / f'{Path(img_path).stem}.txt'
             label_path.parent.mkdir(parents=True, exist_ok=True)
             label_path.touch(exist_ok=True)
-        self.basedata = DataApp(label_path)  # 图片对应的标签数据
+        self.task = task or next(
+            (name for name, value in self.TASK_MODES.items() if value == mod),
+            'detect')
+        self.mod = self.TASK_MODES[self.task]
+        self.kpt_shape = tuple(kpt_shape)
+        self.basedata = DataApp(
+            label_path, task=self.task, kpt_shape=self.kpt_shape)
         self.img_path = img_path
         self.label_path = label_path
-        self.mod = mod  # 0: detect 1: segment 2: pose 3: OBB
         self.org_img = read_img(img_path)  # 原始图像
         self.screen_label = screen_label  # 显示图像的label
         self.label_height = self.screen_label.size().height()  # label的高度
@@ -259,22 +268,43 @@ class Image(QMainWindow):
         self.screen_label.setPixmap(pixmap)
 
     def load_new_labels(self):
-        temp = []
-        # 从YOLO_data中加载标签, 从相对坐标转为绝对坐标（但不是qt label上的坐标）
-        for j, detect_label in enumerate(self.basedata):
-            cls = int(detect_label[0])
-            point = detect_label[1:]
-
-            x, y, w, h = (point[0] - point[2] / 2) * self.org_width, \
-                ((point[1] - point[3] / 2) * self.org_height), \
-                         point[2] * self.org_width, point[3] * self.org_height
-
-            x1, y1, x2, y2 = x, y, x + w, y + h
-            temp.append([cls, x1, y1, x2, y2])
-        self.label_save = temp
+        self.label_save = [
+            self._annotation_from_normalized(raw_label)
+            for raw_label in self.basedata]
         self.parent.len_rect = len(self.label_save)
 
+    def _annotation_from_normalized(self, raw_label):
+        cls = int(raw_label[0])
+        values = raw_label[1:]
+        if self.task == 'detect':
+            x, y, w, h = values
+            return [cls, (x - w / 2) * self.org_width,
+                    (y - h / 2) * self.org_height,
+                    (x + w / 2) * self.org_width,
+                    (y + h / 2) * self.org_height]
+        if self.task in ('segment', 'obb'):
+            points = []
+            for offset in range(0, len(values), 2):
+                points.extend((values[offset] * self.org_width,
+                               values[offset + 1] * self.org_height))
+            return [cls, *points]
+        x, y, w, h = values[:4]
+        converted = [cls, (x - w / 2) * self.org_width,
+                     (y - h / 2) * self.org_height,
+                     (x + w / 2) * self.org_width,
+                     (y + h / 2) * self.org_height]
+        dimensions = self.kpt_shape[1]
+        for offset in range(4, len(values), dimensions):
+            converted.extend((values[offset] * self.org_width,
+                              values[offset + 1] * self.org_height))
+            if dimensions == 3:
+                converted.append(int(values[offset + 2]))
+        return converted
+
     def label_show(self, index=None):
+        if self.task != 'detect':
+            self._label_show_task(index)
+            return
         if self.only_index and index is not None and self.show_other:
             selected_index = self._normalized_index(index, len(self.label_save))
             if selected_index is None:
@@ -348,6 +378,180 @@ class Image(QMainWindow):
             finally:
                 painter.end()
             self.screen_label.setPixmap(pixmap)
+
+    def _class_style(self, class_id):
+        class_id = int(class_id)
+        return normalize_class_style(
+            self.parent.class_styles.get(class_id) if self.parent else None,
+            self.parent.colors.get(class_id) if self.parent else None)
+
+    def _class_name(self, class_id):
+        class_id = int(class_id)
+        if self.parent and self.parent.names and class_id in self.parent.names:
+            return self.parent.names[class_id]
+        return str(class_id)
+
+    def _label_show_task(self, index=None):
+        label_count = len(self.label_save)
+        selected_index = self._normalized_index(index, label_count)
+        if self.only_index and self.show_other and selected_index is not None:
+            order = [selected_index]
+        else:
+            order = self._paint_order(label_count, selected_index)
+        pixmap = self.screen_label.pixmap()
+        if pixmap is None or not order:
+            return
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        try:
+            for label_index in order:
+                label = self.label_save[label_index]
+                style = self._class_style(label[0])
+                selected = label_index == selected_index
+                if self.task in ('segment', 'obb'):
+                    points = [
+                        QPointF(*self.org_xy_to_new_xy(label[offset:offset + 2]))
+                        for offset in range(1, len(label), 2)
+                    ]
+                    self._paint_polygon(
+                        painter, points, self._class_name(label[0]), style,
+                        selected, rotated=self.task == 'obb')
+                else:
+                    self._paint_pose(painter, label, style, selected)
+        finally:
+            painter.end()
+        self.screen_label.setPixmap(pixmap)
+
+    def _paint_polygon(self, painter, points, text, style, selected=False,
+                       rotated=False):
+        if len(points) < 2:
+            return
+        border, width = display_border(
+            style['border'], style['border_width'], selected)
+        painter.setPen(QPen(QColor(*border), width, Qt.SolidLine))
+        painter.setBrush(
+            QColor(*style['fill']) if self.show_box_fill else Qt.NoBrush)
+        polygon = QPolygonF(points)
+        painter.drawPolygon(polygon)
+
+        if self.show_box_circle and selected:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(*style['handle']))
+            for point in points:
+                painter.drawRoundedRect(
+                    QRect(int(point.x()) - 4, int(point.y()) - 4, 8, 8), 2, 2)
+            if rotated and len(points) == 4:
+                handle = self.obb_rotation_handle(points)
+                midpoint = QPointF(
+                    (points[0].x() + points[1].x()) / 2,
+                    (points[0].y() + points[1].y()) / 2)
+                painter.setPen(QPen(QColor(*border), 1))
+                painter.drawLine(midpoint, handle)
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(handle, 5, 5)
+
+        if self.show_box_text and points:
+            font = QFont('Arial')
+            font.setPixelSize(max(6, int(style['text_size'])))
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor(*style['text']))
+            anchor = min(points, key=lambda point: (point.y(), point.x()))
+            painter.drawText(
+                QPointF(anchor.x(), max(12, anchor.y() - 6)), text)
+
+    def _paint_pose(self, painter, label, style, selected=False):
+        cls, x1, y1, x2, y2, *raw_points = label
+        corners = [
+            QPointF(*self.org_xy_to_new_xy((x1, y1))),
+            QPointF(*self.org_xy_to_new_xy((x2, y1))),
+            QPointF(*self.org_xy_to_new_xy((x2, y2))),
+            QPointF(*self.org_xy_to_new_xy((x1, y2))),
+        ]
+        self._paint_polygon(
+            painter, corners, self._class_name(cls), style, selected)
+        dimensions = self.kpt_shape[1]
+        points = []
+        for offset in range(0, len(raw_points), dimensions):
+            visibility = int(raw_points[offset + 2]) if dimensions == 3 else 2
+            point = QPointF(*self.org_xy_to_new_xy(
+                raw_points[offset:offset + 2]))
+            points.append((point, visibility))
+
+        skeleton = getattr(self.parent, 'kpt_skeleton', ())
+        if skeleton:
+            painter.setPen(QPen(QColor(*style['border']), 2))
+            for start, end in skeleton:
+                if (start < len(points) and end < len(points)
+                        and points[start][1] and points[end][1]):
+                    painter.drawLine(points[start][0], points[end][0])
+
+        for point, visibility in points:
+            if visibility == 0:
+                continue
+            painter.setPen(QPen(QColor(*style['border']), 2))
+            painter.setBrush(
+                QColor(*style['handle']) if visibility == 2 else Qt.NoBrush)
+            painter.drawEllipse(point, 4 if selected else 3,
+                                4 if selected else 3)
+
+    @staticmethod
+    def obb_rotation_handle(points, distance=28):
+        if len(points) != 4:
+            return QPointF()
+        midpoint = QPointF((points[0].x() + points[1].x()) / 2,
+                           (points[0].y() + points[1].y()) / 2)
+        center = QPointF(sum(point.x() for point in points) / 4,
+                         sum(point.y() for point in points) / 4)
+        dx, dy = midpoint.x() - center.x(), midpoint.y() - center.y()
+        length = math.hypot(dx, dy) or 1.0
+        return QPointF(midpoint.x() + dx / length * distance,
+                       midpoint.y() + dy / length * distance)
+
+    def task_hit_test(self, x, y, distance=10):
+        """Return (kind, annotation index, control index) for non-box tasks."""
+        for label_index in range(len(self.label_save) - 1, -1, -1):
+            label = self.label_save[label_index]
+            if self.task in ('segment', 'obb'):
+                points = [
+                    QPointF(*self.org_xy_to_new_xy(label[offset:offset + 2]))
+                    for offset in range(1, len(label), 2)
+                ]
+                if self.task == 'obb':
+                    rotation = self.obb_rotation_handle(points)
+                    if math.hypot(x - rotation.x(), y - rotation.y()) <= distance:
+                        return 'rotate', label_index, -1
+                for point_index, point in enumerate(points):
+                    if math.hypot(x - point.x(), y - point.y()) <= distance:
+                        return 'vertex', label_index, point_index
+                if QPolygonF(points).containsPoint(
+                        QPointF(x, y), Qt.OddEvenFill):
+                    return 'shape', label_index, -1
+            else:
+                dimensions = self.kpt_shape[1]
+                raw_points = label[5:]
+                for point_index, offset in enumerate(
+                        range(0, len(raw_points), dimensions)):
+                    visibility = (int(raw_points[offset + 2])
+                                  if dimensions == 3 else 2)
+                    if visibility == 0:
+                        continue
+                    point = self.org_xy_to_new_xy(
+                        raw_points[offset:offset + 2])
+                    if math.hypot(x - point[0], y - point[1]) <= distance:
+                        return 'keypoint', label_index, point_index
+                p1 = self.org_xy_to_new_xy(label[1:3])
+                p2 = self.org_xy_to_new_xy(label[3:5])
+                bbox_points = (
+                    p1, (p2[0], p1[1]), p2, (p1[0], p2[1]))
+                for point_index, point in enumerate(bbox_points):
+                    if math.hypot(x - point[0], y - point[1]) <= distance:
+                        return 'bbox_vertex', label_index, point_index
+                left, right = sorted((p1[0], p2[0]))
+                top, bottom = sorted((p1[1], p2[1]))
+                if left <= x <= right and top <= y <= bottom:
+                    return 'shape', label_index, -1
+        return None, -1, -1
 
     @staticmethod
     def _normalized_index(index, label_count):
@@ -528,6 +732,9 @@ class Image(QMainWindow):
 
     def change(self, index, label):
         # 修改标签
+        if self.task != 'detect':
+            self.change_annotation(index, label)
+            return
         if self.mod == 0:
             label = self._clamp_label(label)
             self.label_save[index] = label
@@ -546,6 +753,89 @@ class Image(QMainWindow):
         y1, y2 = sorted((max(0.0, min(float(y1), self.org_height)),
                          max(0.0, min(float(y2), self.org_height))))
         return [int(cls), x1, y1, x2, y2]
+
+    def _clamp_point(self, point):
+        return (max(0.0, min(float(point[0]), self.org_width)),
+                max(0.0, min(float(point[1]), self.org_height)))
+
+    def _normalize_annotation(self, label):
+        cls = int(label[0])
+        if self.task in ('segment', 'obb'):
+            coordinates = []
+            for offset in range(1, len(label), 2):
+                x, y = self._clamp_point(label[offset:offset + 2])
+                coordinates.extend((x / self.org_width, y / self.org_height))
+            return [cls, *coordinates]
+        if self.task == 'pose':
+            cls, x1, y1, x2, y2, *raw_points = label
+            x1, y1 = self._clamp_point((x1, y1))
+            x2, y2 = self._clamp_point((x2, y2))
+            x1, x2 = sorted((x1, x2))
+            y1, y2 = sorted((y1, y2))
+            normalized = [int(cls), (x1 + x2) / 2 / self.org_width,
+                          (y1 + y2) / 2 / self.org_height,
+                          (x2 - x1) / self.org_width,
+                          (y2 - y1) / self.org_height]
+            dimensions = self.kpt_shape[1]
+            for offset in range(0, len(raw_points), dimensions):
+                x, y = self._clamp_point(raw_points[offset:offset + 2])
+                normalized.extend((x / self.org_width, y / self.org_height))
+                if dimensions == 3:
+                    normalized.append(int(raw_points[offset + 2]))
+            return normalized
+        raise ValueError(f'任务 {self.task} 不使用通用标注转换')
+
+    def append_annotation(self, label):
+        normalized = self._normalize_annotation(label)
+        self.basedata.append(normalized)
+        self.label_save.append(self._annotation_from_normalized(normalized))
+        if self.parent:
+            self.parent.len_rect = len(self.label_save)
+        self.show(*self.center, scale=self.wheel_scale)
+        self.label_show(len(self.label_save) - 1)
+        return len(self.label_save) - 1
+
+    def change_annotation(self, index, label):
+        normalized = self._normalize_annotation(label)
+        self.basedata[index] = normalized
+        self.label_save[index] = self._annotation_from_normalized(normalized)
+        self.show(*self.center, scale=self.wheel_scale)
+        self.label_show(index)
+
+    def draw_task_draft(self, points=None, cursor=None, bbox=None,
+                        pose_points=None):
+        """Draw an unsaved task annotation over the current canvas frame."""
+        pixmap = self.screen_label.pixmap()
+        if pixmap is None:
+            return
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        style = self._class_style(self.parent.cls if self.parent else 0)
+        border, width = display_border(style['border'], 2, True)
+        painter.setPen(QPen(QColor(*border), width, Qt.DashLine))
+        painter.setBrush(QColor(*style['fill']))
+        if points:
+            canvas_points = [QPointF(*self.org_xy_to_new_xy(point))
+                             for point in points]
+            path_points = list(canvas_points)
+            if cursor is not None:
+                path_points.append(QPointF(*cursor))
+            if len(path_points) >= 2:
+                painter.drawPolyline(QPolygonF(path_points))
+            painter.setBrush(QColor(*style['handle']))
+            for point in canvas_points:
+                painter.drawEllipse(point, 4, 4)
+        if bbox is not None:
+            p1 = QPointF(*self.org_xy_to_new_xy(bbox[:2]))
+            p2 = QPointF(*self.org_xy_to_new_xy(bbox[2:]))
+            painter.drawRect(QRectF(p1, p2).normalized())
+        if pose_points:
+            painter.setBrush(QColor(*style['handle']))
+            for point in pose_points:
+                canvas_point = QPointF(*self.org_xy_to_new_xy(point))
+                painter.drawEllipse(canvas_point, 4, 4)
+        painter.end()
+        self.screen_label.setPixmap(pixmap)
 
     def save(self):
         self.basedata.save()
