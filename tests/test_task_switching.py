@@ -420,6 +420,47 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(actions, ['stop', 'cancel'])
 
+    def test_segment_blank_click_deselects_before_starting_new_polygon(self):
+        actions = []
+        messages = []
+        event = SimpleNamespace(
+            type=lambda: QEvent.MouseButtonPress,
+            button=lambda: Qt.LeftButton,
+            modifiers=lambda: Qt.NoModifier,
+        )
+        image = SimpleNamespace(
+            task_hit_test=lambda x, y: (None, -1, -1),
+            new_xy_to_org_xy=lambda point: point,
+        )
+        window = SimpleNamespace(
+            label=object(), mouse_pos=None, annotation_task='segment',
+            task_draft_points=[], is_choose_rect=True,
+            is_choose_rect_index=2, img=image,
+            _event_canvas_pos=lambda source, current_event: (30, 40),
+            _cancel_interaction_redraw=lambda: None,
+            _cancel_current_annotation=lambda: False,
+            pos_in_org=lambda position: True,
+            _clear_task_selection=lambda: actions.append('deselect'),
+            move_xy=lambda *args, **kwargs: actions.append('redraw'),
+            _redraw_task_draft=lambda **kwargs: actions.append('draft'),
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+        )
+
+        handled = MainWin._task_event_filter(window, event)
+
+        self.assertTrue(handled)
+        self.assertEqual(actions, ['deselect', 'redraw'])
+        self.assertEqual(window.task_draft_points, [])
+        self.assertIn('再次点击空白开始绘制', messages[-1])
+
+        actions.clear()
+        window.is_choose_rect = False
+        MainWin._task_event_filter(window, event)
+
+        self.assertEqual(window.task_draft_points, [(30, 40)])
+        self.assertEqual(actions, ['deselect', 'draft'])
+
     def test_double_click_opens_category_picker_for_every_task(self):
         opened = []
 

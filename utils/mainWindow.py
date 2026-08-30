@@ -1776,6 +1776,12 @@ class MainWin(QMainWindow):
                         return True
                 hit = self.img.task_hit_test(*position)
                 if hit[0] is None:
+                    if self.is_choose_rect:
+                        self._clear_task_selection()
+                        self.move_xy()
+                        self.statusBar().showMessage(
+                            'SEGMENT  |  已取消选择；再次点击空白开始绘制')
+                        return True
                     self._clear_task_selection()
                     self.task_draft_points = [
                         self.img.new_xy_to_org_xy(position)]
