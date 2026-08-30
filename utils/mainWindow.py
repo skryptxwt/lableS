@@ -43,6 +43,7 @@ DEFAULT_SHORTCUTS = {
     'zoom_out': ('缩小画布', '-'),
     'reset_view': ('重置画布', '0'),
     'save_labels': ('保存标签', 'Ctrl+S'),
+    'insert_segment_vertex': ('插入分割点', 'I'),
 }
 
 COCO_KEYPOINT_NAMES = (
@@ -909,7 +910,7 @@ class MainWin(QMainWindow):
         hints = {
             'detect': '拖动绘制检测框；拖动框内部可整体移动',
             'segment': ('逐点单击绘制，单击起点、双击或 Enter 闭合；'
-                        'Shift+单击边线插入顶点'),
+                        '鼠标悬停边线后按插点快捷键'),
             'obb': '拖动绘制旋转框；边中点调单边，上方圆点或滚轮旋转',
             'pose': (f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；'
                      'Shift+左键=遮挡，Alt+左键=缺失'),
@@ -1145,6 +1146,7 @@ class MainWin(QMainWindow):
             'zoom_out': self.imgDown_,
             'reset_view': self.resetShowImg_,
             'save_labels': self.save_,
+            'insert_segment_vertex': self.insert_segment_vertex_at_cursor,
         }
         for key, sequence in self.shortcut_bindings.items():
             shortcut = QShortcut(QKeySequence(sequence), self)
@@ -1764,16 +1766,6 @@ class MainWin(QMainWindow):
                         self.img.new_xy_to_org_xy(position))
                     self._redraw_task_draft(cursor=position)
                     return True
-                if MainWin._segment_insert_requested(event.modifiers()):
-                    selected = (self.is_choose_rect_index
-                                if self.is_choose_rect else None)
-                    edge_hit = self.img.segment_edge_hit_test(
-                        *position, annotation_index=selected)
-                    if edge_hit is None and selected is not None:
-                        edge_hit = self.img.segment_edge_hit_test(*position)
-                    if edge_hit is not None:
-                        self._insert_segment_vertex(edge_hit)
-                        return True
                 hit = self.img.task_hit_test(*position)
                 if hit[0] is None:
                     if self.is_choose_rect:
@@ -2098,11 +2090,6 @@ class MainWin(QMainWindow):
         first = self.img.org_xy_to_new_xy(self.task_draft_points[0])
         return distance(first, position) <= radius
 
-    @staticmethod
-    def _segment_insert_requested(modifiers):
-        """Use Shift for vertex insertion; Ctrl is reserved for canvas pan."""
-        return bool(modifiers & Qt.ShiftModifier)
-
     def _finish_segment(self):
         points = self._clean_segment_points(self.task_draft_points)
         if len(points) < 3:
@@ -2263,6 +2250,24 @@ class MainWin(QMainWindow):
         self.statusBar().showMessage(
             'SEGMENT  |  已插入新顶点；拖动该顶点可调整轮廓')
         return True
+
+    def insert_segment_vertex_at_cursor(self):
+        """Insert a segment vertex at the edge currently under the pointer."""
+        if (not self.img_is_load or self.annotation_task != 'segment'
+                or self.task_draft_points or self.mouse_pos is None):
+            return False
+        position = tuple(self.mouse_pos)
+        selected = (self.is_choose_rect_index
+                    if self.is_choose_rect else None)
+        edge_hit = self.img.segment_edge_hit_test(
+            *position, annotation_index=selected)
+        if edge_hit is None and selected is not None:
+            edge_hit = self.img.segment_edge_hit_test(*position)
+        if edge_hit is None:
+            self.statusBar().showMessage(
+                'SEGMENT  |  请将鼠标移到已有分割边线上再执行插点', 5000)
+            return False
+        return self._insert_segment_vertex(edge_hit)
 
     def _append_pose_point(self, position, visibility=2):
         dimensions = self.kpt_shape[1]

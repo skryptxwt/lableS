@@ -345,10 +345,27 @@ class TaskSwitchingTest(unittest.TestCase):
             3, 10, 10, 90, 10, 90.0, 50.0, 90, 90, 10, 90])
         self.assertIn('已插入新顶点', messages[-1])
 
-    def test_segment_vertex_insert_uses_shift_not_ctrl(self):
-        self.assertTrue(MainWin._segment_insert_requested(Qt.ShiftModifier))
-        self.assertFalse(MainWin._segment_insert_requested(Qt.ControlModifier))
-        self.assertFalse(MainWin._segment_insert_requested(Qt.NoModifier))
+    def test_segment_vertex_insert_uses_configurable_shortcut(self):
+        inserted = []
+        edge_hit = (2, 1, (30.0, 40.0))
+        image = SimpleNamespace(
+            segment_edge_hit_test=lambda *_args, **_kwargs: edge_hit)
+        window = SimpleNamespace(
+            img_is_load=True,
+            annotation_task='segment',
+            task_draft_points=[],
+            mouse_pos=[30, 40],
+            is_choose_rect=True,
+            is_choose_rect_index=2,
+            img=image,
+            _insert_segment_vertex=lambda hit: inserted.append(hit) or True,
+        )
+
+        self.assertEqual(
+            main_window_module.DEFAULT_SHORTCUTS['insert_segment_vertex'],
+            ('插入分割点', 'I'))
+        self.assertTrue(MainWin.insert_segment_vertex_at_cursor(window))
+        self.assertEqual(inserted, [edge_hit])
 
     def test_cancel_segment_draft_discards_only_unsaved_points(self):
         messages = []
