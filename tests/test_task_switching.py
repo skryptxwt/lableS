@@ -132,6 +132,63 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual(window.img.label_save, [])
         self.assertIn('POSE SAVE FAILED', messages[-1])
 
+    def test_segment_closes_only_near_first_point_after_three_vertices(self):
+        image = SimpleNamespace(org_xy_to_new_xy=lambda point: point)
+        window = SimpleNamespace(
+            img_is_load=True,
+            img=image,
+            task_draft_points=[(20, 20), (80, 20), (80, 80)],
+        )
+
+        self.assertTrue(MainWin._segment_can_close(window, (29, 25)))
+        self.assertFalse(MainWin._segment_can_close(window, (40, 40)))
+        window.task_draft_points.pop()
+        self.assertFalse(MainWin._segment_can_close(window, (20, 20)))
+
+    def test_segment_cleanup_removes_adjacent_and_closing_duplicates(self):
+        points = [(10, 10), (10, 10), (40, 10), (40, 40), (10, 10)]
+
+        cleaned = MainWin._clean_segment_points(points)
+
+        self.assertEqual(cleaned, [(10.0, 10.0), (40.0, 10.0),
+                                   (40.0, 40.0)])
+
+    def test_segment_save_failure_keeps_draft_and_rolls_back_annotation(self):
+        messages = []
+
+        class FailingImage:
+            def __init__(self):
+                self.label_save = []
+
+            def append_annotation(self, label):
+                self.label_save.append(label)
+                return len(self.label_save) - 1
+
+            @staticmethod
+            def save():
+                raise PermissionError('标签文件正在使用')
+
+            def pop(self, index):
+                self.label_save.pop(index)
+
+        original = [(10, 10), (80, 10), (80, 80)]
+        window = SimpleNamespace(
+            task_draft_points=list(original),
+            cls=2,
+            img=FailingImage(),
+            _clean_segment_points=MainWin._clean_segment_points,
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+            _redraw_task_draft=lambda: None,
+        )
+
+        saved = MainWin._finish_segment(window)
+
+        self.assertFalse(saved)
+        self.assertEqual(window.task_draft_points, original)
+        self.assertEqual(window.img.label_save, [])
+        self.assertIn('SEGMENT SAVE FAILED', messages[-1])
+
 
 if __name__ == '__main__':
     unittest.main()

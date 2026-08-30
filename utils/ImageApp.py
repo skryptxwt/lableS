@@ -971,7 +971,7 @@ class Image(QMainWindow):
         self.label_show(index)
 
     def draw_task_draft(self, points=None, cursor=None, bbox=None,
-                        pose_points=None):
+                        pose_points=None, close_polygon=False):
         """Draw an unsaved task annotation over the current canvas frame."""
         pixmap = self.screen_label.pixmap()
         if pixmap is None:
@@ -989,13 +989,19 @@ class Image(QMainWindow):
             if cursor is not None:
                 path_points.append(QPointF(*cursor))
             if len(path_points) >= 2:
-                if self.task == 'obb' and cursor is None and len(path_points) == 4:
+                if close_polygon and len(canvas_points) >= 3:
+                    painter.drawPolygon(QPolygonF(canvas_points))
+                elif self.task == 'obb' and cursor is None and len(path_points) == 4:
                     painter.drawPolygon(QPolygonF(path_points))
                 else:
                     painter.drawPolyline(QPolygonF(path_points))
             painter.setBrush(QColor(*style['handle']))
             for point in canvas_points:
                 painter.drawEllipse(point, 4, 4)
+            if close_polygon and len(canvas_points) >= 3:
+                painter.setBrush(Qt.NoBrush)
+                painter.setPen(QPen(QColor(*border), max(2, width)))
+                painter.drawEllipse(canvas_points[0], 9, 9)
         if bbox is not None:
             p1 = QPointF(*self.org_xy_to_new_xy(bbox[:2]))
             p2 = QPointF(*self.org_xy_to_new_xy(bbox[2:]))

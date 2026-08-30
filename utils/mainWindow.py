@@ -1668,6 +1668,9 @@ class MainWin(QMainWindow):
 
             if self.annotation_task == 'segment':
                 if self.task_draft_points:
+                    if self._segment_can_close(position):
+                        self._finish_segment()
+                        return True
                     self.task_draft_points.append(
                         self.img.new_xy_to_org_xy(position))
                     self._redraw_task_draft(cursor=position)
@@ -1700,7 +1703,11 @@ class MainWin(QMainWindow):
 
         if event.type() == QEvent.MouseMove:
             if self.annotation_task == 'segment' and self.task_draft_points:
-                self._redraw_task_draft(cursor=position)
+                can_close = self._segment_can_close(position)
+                self.setCursor(Qt.PointingHandCursor if can_close
+                               else Qt.CrossCursor)
+                self._redraw_task_draft(
+                    cursor=position, close_polygon=can_close)
                 return True
             if self.task_edit is not None and self.mouse_left_press:
                 self._update_task_edit(position, event.modifiers())
@@ -1906,17 +1913,60 @@ class MainWin(QMainWindow):
         return (start[0] + math.copysign(side, dx or 1.0),
                 start[1] + math.copysign(side, dy or 1.0))
 
+    @staticmethod
+    def _clean_segment_points(points, epsilon=1e-6):
+        """Remove duplicate clicks without changing the polygon's shape."""
+        cleaned = []
+        for point in points:
+            point = (float(point[0]), float(point[1]))
+            if (not cleaned
+                    or math.hypot(point[0] - cleaned[-1][0],
+                                  point[1] - cleaned[-1][1]) > epsilon):
+                cleaned.append(point)
+        if (len(cleaned) > 1
+                and math.hypot(cleaned[-1][0] - cleaned[0][0],
+                               cleaned[-1][1] - cleaned[0][1]) <= epsilon):
+            cleaned.pop()
+        return cleaned
+
+    def _segment_can_close(self, position, radius=14):
+        """Return True when a valid draft is close enough to its first point."""
+        if (not self.img_is_load or len(self.task_draft_points) < 3):
+            return False
+        first = self.img.org_xy_to_new_xy(self.task_draft_points[0])
+        return distance(first, position) <= radius
+
     def _finish_segment(self):
-        if len(self.task_draft_points) < 3:
+        points = self._clean_segment_points(self.task_draft_points)
+        if len(points) < 3:
             self.statusBar().showMessage('SEGMENT  |  至少需要 3 个顶点')
-            return
+            return False
+        twice_area = abs(sum(
+            points[index][0] * points[(index + 1) % len(points)][1]
+            - points[(index + 1) % len(points)][0] * points[index][1]
+            for index in range(len(points))))
+        if twice_area <= 2.0:
+            self.statusBar().showMessage('SEGMENT  |  多边形面积过小，无法保存')
+            return False
         label = [self.cls]
-        for point in self.task_draft_points:
+        for point in points:
             label.extend(point)
+        index = None
+        try:
+            index = self.img.append_annotation(label)
+            self.img.save()
+        except (OSError, ValueError) as exc:
+            if index is not None and index < len(self.img.label_save):
+                self.img.pop(index)
+            self.statusBar().showMessage(
+                f'SEGMENT SAVE FAILED  |  {exc}', 9000)
+            self._redraw_task_draft()
+            return False
         self.task_draft_points = []
-        index = self.img.append_annotation(label)
-        self.img.save()
+        self.setCursor(Qt.CrossCursor)
         self._select_task_annotation(index)
+        self.statusBar().showMessage('SEGMENT  |  实例分割标注已保存')
+        return True
 
     def _append_pose_point(self, position, visibility=2):
         dimensions = self.kpt_shape[1]
@@ -1969,7 +2019,7 @@ class MainWin(QMainWindow):
         else:
             self.img.draw_task_draft(bbox=[x1, y1, x2, y2])
 
-    def _redraw_task_draft(self, cursor=None):
+    def _redraw_task_draft(self, cursor=None, close_polygon=False):
         if not self.img_is_load:
             return
         self.img.show(*self.img.center, scale=self.wheel_scale)
@@ -1977,6 +2027,7 @@ class MainWin(QMainWindow):
         self.img.draw_task_draft(
             points=self.task_draft_points,
             cursor=cursor,
+            close_polygon=close_polygon,
             bbox=self.task_pose_bbox,
             pose_points=[point[:2] for point in self.task_pose_points
                          if len(point) < 3 or point[2] != 0])
