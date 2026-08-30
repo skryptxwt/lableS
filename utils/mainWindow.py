@@ -845,8 +845,8 @@ class MainWin(QMainWindow):
                 self.boxShowWidget.set_rect_box()
         hints = {
             'detect': '拖动绘制检测框；拖动框内部可整体移动',
-            'segment': ('逐点单击绘制，双击或 Enter 闭合；'
-                        '选中后双击边线插入顶点'),
+            'segment': ('逐点单击绘制，单击起点、双击或 Enter 闭合；'
+                        '右键取消，选中后双击边线插入顶点'),
             'obb': '拖动绘制旋转框；边中点调单边，上方圆点或滚轮旋转',
             'pose': f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；右键记为缺失',
         }
@@ -1668,7 +1668,7 @@ class MainWin(QMainWindow):
         if event.type() == QEvent.MouseButtonPress:
             if event.button() == Qt.RightButton:
                 if self.annotation_task == 'segment' and self.task_draft_points:
-                    self._finish_segment()
+                    self._cancel_segment_draft()
                 elif self.annotation_task == 'pose' and self.task_pose_bbox:
                     self._append_pose_point(None, visibility=0)
                 elif self.is_choose_rect:
@@ -1986,6 +1986,16 @@ class MainWin(QMainWindow):
         self.setCursor(Qt.CrossCursor)
         self._select_task_annotation(index)
         self.statusBar().showMessage('SEGMENT  |  实例分割标注已保存')
+        return True
+
+    def _cancel_segment_draft(self):
+        """Discard only the unfinished segment currently being drawn."""
+        if not self.task_draft_points:
+            return False
+        self.task_draft_points = []
+        self.setCursor(Qt.CrossCursor)
+        self._redraw_task_draft()
+        self.statusBar().showMessage('SEGMENT  |  已取消当前绘制')
         return True
 
     def _insert_segment_vertex(self, edge_hit):

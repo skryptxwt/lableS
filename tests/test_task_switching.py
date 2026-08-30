@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QComboBox, QSpinBox
 
 from utils import mainWindow as main_window_module
@@ -224,6 +225,26 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual(image.label_save[0], [
             3, 10, 10, 90, 10, 90.0, 50.0, 90, 90, 10, 90])
         self.assertIn('已插入新顶点', messages[-1])
+
+    def test_cancel_segment_draft_discards_only_unsaved_points(self):
+        messages = []
+        redraws = []
+        cursors = []
+        window = SimpleNamespace(
+            task_draft_points=[(10, 10), (80, 10), (80, 80)],
+            setCursor=lambda cursor: cursors.append(cursor),
+            _redraw_task_draft=lambda: redraws.append(True),
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+        )
+
+        cancelled = MainWin._cancel_segment_draft(window)
+
+        self.assertTrue(cancelled)
+        self.assertEqual(window.task_draft_points, [])
+        self.assertEqual(redraws, [True])
+        self.assertEqual(cursors, [Qt.CrossCursor])
+        self.assertIn('已取消当前绘制', messages[-1])
 
 
 if __name__ == '__main__':
