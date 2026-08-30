@@ -18,7 +18,7 @@ from .class_styles import (
     build_class_styles, default_class_style, normalize_class_style,
     serialize_class_styles,
 )
-from .common_fun import root
+from .common_fun import CONFIG_PATH, root
 from .industrial_theme import INDUSTRIAL_QSS
 from .window_chrome import TitleBar
 
@@ -270,7 +270,7 @@ class modificationCls(QMainWindow):
         self.initUI()
 
     def _load_config(self):
-        with open(root / 'Detection.yaml', 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file) or {}
         self.names = {
             int(key): str(value)
@@ -660,7 +660,7 @@ class modificationCls(QMainWindow):
         self.configChanged.emit(dict(self.names), dict(self.styles))
 
     def _persist(self):
-        with open(root / 'Detection.yaml', 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file) or {}
         data['names'] = dict(self.names)
         data['class_styles'] = serialize_class_styles(self.styles)
@@ -668,7 +668,7 @@ class modificationCls(QMainWindow):
             class_id: list(style['fill'])
             for class_id, style in self.styles.items()
         }
-        with open(root / 'Detection.yaml', 'w', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as file:
             yaml.safe_dump(data, file, allow_unicode=True, sort_keys=False)
 
     def _notify_preview(self):

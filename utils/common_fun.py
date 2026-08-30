@@ -4,6 +4,7 @@ from PIL import Image
 from pathlib import Path
 
 root = Path(__file__).parent
+CONFIG_PATH = root.parent / 'config.yaml'
 
 
 def distance(x1y1, x2y2):

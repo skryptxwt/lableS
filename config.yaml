@@ -18,7 +18,7 @@ colors:
   - 178
   - 255
   - 206
-  - 143
+  - 74
   4:
   - 255
   - 255
@@ -86,8 +86,8 @@ names:
   12: '12'
   13: '13'
 save_path: temp_folder
-background_image: C:/Users/22320/Desktop/LabelS/1.png
-background_opacity: 100
+background_image: ''
+background_opacity: 65
 class_styles:
   0:
     border:
@@ -169,24 +169,24 @@ class_styles:
     - 0
     - 0
     - 0
-    - 230
+    - 191
     border_width: 2
     fill:
     - 178
     - 255
     - 206
-    - 143
+    - 74
     handle:
     - 238
     - 68
     - 75
-    - 230
+    - 178
     handle_size: 8
     text:
     - 255
     - 0
     - 0
-    - 255
+    - 153
     text_size: 20
     text_position: outside_top_left
   4:
@@ -440,7 +440,7 @@ class_styles:
     text_size: 20
     text_position: outside_top_left
 detection_confidence: 50
-thumbnail_size: 80
+thumbnail_size: 74
 shortcuts:
   previous_image: Z
   next_image: X
@@ -450,9 +450,10 @@ shortcuts:
   zoom_out: '-'
   reset_view: '0'
   save_labels: Ctrl+S
+  insert_segment_vertex: I
 wheel_pan_enabled: false
 wheel_zoom_enabled: true
-annotation_task: obb
+annotation_task: detect
 kpt_shape:
 - 17
 - 3

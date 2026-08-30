@@ -2,7 +2,7 @@ import yaml
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QWidget
 
-from .common_fun import root
+from .common_fun import CONFIG_PATH
 
 
 class CategoryApp(QWidget):
@@ -19,7 +19,7 @@ class CategoryApp(QWidget):
         self.init()
 
     def init(self):
-        with open(root.parent / 'Detection.yaml', 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file)
         self.categories = data['names']
         self.categories = [' ' + str(name) for _, name in sorted(self.categories.items())]

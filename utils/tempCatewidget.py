@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout,
                              QLabel, QListWidgetItem, QPushButton, QWidget)
 
 from .class_styles import mapping_value, normalize_class_style
-from .common_fun import root
+from .common_fun import CONFIG_PATH, root
 from .industrial_theme import INDUSTRIAL_QSS
 
 
@@ -75,7 +75,7 @@ class CategoryApp(QWidget):
         self.setStyleSheet(INDUSTRIAL_QSS)
 
     def init(self):
-        with open(root.parent / 'Detection.yaml', 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file)
         names = getattr(self.main_window, 'names', None) or data['names']
         if isinstance(names, dict):

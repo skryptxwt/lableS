@@ -24,7 +24,7 @@ from .ImageApp import Image
 from .DataApp import DataApp
 from .thumbnailApp import thumbnailApp
 from .modificationCls import modificationCls
-from .common_fun import distance, root
+from .common_fun import CONFIG_PATH, distance, root
 from .class_styles import build_class_styles, normalize_class_style
 from .industrial_theme import INDUSTRIAL_QSS
 from .ui_icons import toolbar_icon
@@ -111,29 +111,6 @@ class MainWin(QMainWindow):
         self.load_model = self.ui.load_model  # 导入模型
         self.detect = self.ui.detect  # 检测
         self.lineEdit = self.ui.lineEdit  # 检测置信度
-
-        # —————————————————————————————   素材   ————————————————————————————#
-        folder = QtGui.QPixmap(str(root / "utils/material/folder.png"))
-        file = QtGui.QPixmap(str(root / "utils/material/file.png"))
-        label = QtGui.QPixmap(str(root / "utils/material/label.png"))
-        hand = QtGui.QPixmap(str(root / "utils/material/hand.png"))
-        arrows = QtGui.QPixmap(str(root / "utils/material/arrow.png"))
-        Down = QtGui.QPixmap(str(root / "utils/material/down.png"))
-        Up = QtGui.QPixmap(str(root / "utils/material/Up.png"))
-        reset = QtGui.QPixmap(str(root / "utils/material/reset.png"))
-        export = QtGui.QPixmap(str(root / "utils/material/export.png"))
-        color = QtGui.QPixmap(str(root / "utils/material/color.png"))
-
-        self.open_folder.setIcon(QtGui.QIcon(folder.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.open_file.setIcon(QtGui.QIcon(file.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.readFolderLabel.setIcon(QtGui.QIcon(label.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.hand_button.setIcon(QtGui.QIcon(hand.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.arrows_button.setIcon(QtGui.QIcon(arrows.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.imgDOWN.setIcon(QtGui.QIcon(Down.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.imgUP.setIcon(QtGui.QIcon(Up.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.resetShowImg.setIcon(QtGui.QIcon(reset.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.save_label.setIcon(QtGui.QIcon(export.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-        self.cls_color.setIcon(QtGui.QIcon(color.scaled(15, 15, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
 
         # ————————————————————————————— 快捷键相关变量 ————————————————————————————#
         self.shortcut_bindings = {
@@ -1129,11 +1106,10 @@ class MainWin(QMainWindow):
 
     @staticmethod
     def _save_background_config(**updates):
-        config_path = root / 'Detection.yaml'
-        with open(config_path, 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file) or {}
         data.update(updates)
-        with open(config_path, 'w', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as file:
             yaml.safe_dump(data, file, allow_unicode=True, sort_keys=False)
 
     def _create_shortcuts(self):
@@ -1301,7 +1277,7 @@ class MainWin(QMainWindow):
     def init(self, img_path=None):
         # 先加载本地的配置文件
         # names : 类别名字 list, colors : 类别颜色 list, cls : 默认类别 int, save_path : 默认保存路径 str
-        with open(root / 'Detection.yaml', 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file)
 
         if not self._background_initialized:
