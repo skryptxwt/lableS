@@ -3,7 +3,7 @@ from PyQt5 import uic
 from PyQt5.QtCore import QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout,
-                             QLabel, QListWidgetItem, QWidget)
+                             QLabel, QListWidgetItem, QPushButton, QWidget)
 
 from .class_styles import mapping_value, normalize_class_style
 from .common_fun import root
@@ -20,7 +20,9 @@ class CategoryApp(QWidget):
         self.category_entries = []
         self.index = None
         self.cls_index = None
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
+        # Qt.Popup provides native outside-click dismissal, which is essential
+        # for task modes whose canvas events are handled by a separate filter.
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setObjectName('categoryPopup')
@@ -40,9 +42,15 @@ class CategoryApp(QWidget):
         self.title_label.setObjectName('categoryPopupTitle')
         self.current_badge = QLabel('', self.header)
         self.current_badge.setObjectName('categoryPopupCurrent')
+        self.close_button = QPushButton('×', self.header)
+        self.close_button.setObjectName('categoryPopupClose')
+        self.close_button.setFixedSize(24, 24)
+        self.close_button.setToolTip('关闭')
+        self.close_button.clicked.connect(self.close)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.current_badge)
+        header_layout.addWidget(self.close_button)
         popup_layout.addWidget(self.header, 0, 0)
         popup_layout.addWidget(self.listWidget, 1, 0)
         popup_layout.setRowStretch(1, 1)
@@ -126,7 +134,14 @@ class CategoryApp(QWidget):
         """更改标签内容为点击的类别索引"""
         index = self.main_window.is_choose_rect_index
 
-        if index is None or index > len(self.main_window.img.basedata) - 1:
+        image = getattr(self.main_window, 'img', None)
+        if (image is None or index is None or index < 0
+                or index >= len(image.basedata)):
+            status_bar = getattr(self.main_window, 'statusBar', None)
+            if callable(status_bar):
+                status_bar().showMessage(
+                    'CATEGORY  |  当前没有可调整类别的标注对象', 4000)
+            self.close()
             return
         # self.main_window.is_hover_move_allow = True
         self.cls_index = int(item.data(Qt.UserRole))
@@ -180,7 +195,14 @@ class CategoryApp(QWidget):
 
     def closeEvent(self, event):
         self.main_window.change_label_name = False
+        if getattr(self.main_window, 'temp_widget', None) is self:
+            self.main_window.temp_widget = None
         super().closeEvent(event)
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if not self.isActiveWindow():
+            self.close()
 
     def paintEvent(self, event):
         # A translucent top-level QWidget is not guaranteed to paint its QSS

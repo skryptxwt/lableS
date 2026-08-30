@@ -7,9 +7,40 @@ from PyQt5.QtWidgets import QComboBox, QSpinBox
 
 from utils import mainWindow as main_window_module
 from utils.mainWindow import MainWin
+from utils.tempCatewidget import CategoryApp as CategoryPopup
 
 
 class TaskSwitchingTest(unittest.TestCase):
+    def test_category_popup_close_detaches_shared_reference(self):
+        closed = []
+        popup = SimpleNamespace(close=lambda: closed.append(True))
+        window = SimpleNamespace(temp_widget=popup)
+
+        result = MainWin._close_category_popup(window)
+
+        self.assertTrue(result)
+        self.assertIsNone(window.temp_widget)
+        self.assertEqual(closed, [True])
+
+    def test_category_popup_closes_when_annotation_is_no_longer_valid(self):
+        messages = []
+        closed = []
+        main = SimpleNamespace(
+            is_choose_rect_index=None,
+            img=SimpleNamespace(basedata=[]),
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+        )
+        popup = SimpleNamespace(
+            main_window=main,
+            close=lambda: closed.append(True),
+        )
+
+        CategoryPopup.changeLabel(popup, SimpleNamespace())
+
+        self.assertEqual(closed, [True])
+        self.assertIn('没有可调整类别的标注对象', messages[-1])
+
     def test_toolbar_width_includes_text_padding(self):
         self.assertEqual(MainWin._toolbar_control_width(82, 88), 106)
         self.assertEqual(MainWin._toolbar_control_width(40, 88), 88)

@@ -62,6 +62,30 @@ QLabel#categoryPopupCurrent {
     font-size: 10px;
 }
 
+QPushButton#categoryPopupClose {
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    color: #64747e;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 0;
+    font-family: "Segoe UI";
+    font-size: 16px;
+    font-weight: 400;
+}
+
+QPushButton#categoryPopupClose:hover {
+    color: #ffffff;
+    background: #c95860;
+}
+
+QPushButton#categoryPopupClose:pressed {
+    background: #ad424a;
+}
+
 QListWidget#categoryPopupList {
     color: #2c3942;
     background: rgba(255, 255, 255, 105);

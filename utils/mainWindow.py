@@ -920,6 +920,7 @@ class MainWin(QMainWindow):
         return True
 
     def _reset_task_interaction(self):
+        MainWin._close_category_popup(self)
         if hasattr(self, '_obb_save_timer'):
             self._obb_save_timer.stop()
         if hasattr(self, '_interaction_redraw_timer'):
@@ -1573,8 +1574,7 @@ class MainWin(QMainWindow):
         if event.type() == QEvent.MouseButtonPress and event.type() != QEvent.MouseButtonDblClick:
             if event.button() == Qt.LeftButton:  # 鼠标左键按下, 双击也会触发
                 if self.temp_widget is not None:
-                    self.temp_widget.close()
-                self.temp_widget = None
+                    self._close_category_popup()
 
                 if self.mouse_left_press is False and self.img_is_load:
 
@@ -1880,6 +1880,7 @@ class MainWin(QMainWindow):
         return True
 
     def _clear_task_selection(self):
+        MainWin._close_category_popup(self)
         if self.img_is_load:
             self.img.only_index = False
         self.is_choose_rect = False
@@ -1914,11 +1915,19 @@ class MainWin(QMainWindow):
         else:
             self._select_task_annotation(index)
             self.cls = int(self.img.label_save[index][0])
-        if self.temp_widget is not None:
-            self.temp_widget.close()
+        self._close_category_popup()
         self.temp_widget = tempWidget(self, QListWidget())
         self.temp_widget.set_rect_cls(self.cls, index)
         self.temp_widget.show_at(global_position)
+        return True
+
+    def _close_category_popup(self):
+        """Close and detach the shared class picker, if it is visible."""
+        popup = getattr(self, 'temp_widget', None)
+        if popup is None:
+            return False
+        self.temp_widget = None
+        popup.close()
         return True
 
     def _begin_task_edit(self, hit, position):
@@ -2404,6 +2413,10 @@ class MainWin(QMainWindow):
             self._sync_tool_mode_buttons()
 
     def keyPressEvent(self, event):
+        if (event.key() == Qt.Key_Escape
+                and MainWin._close_category_popup(self)):
+            event.accept()
+            return
         if (self.img_is_load and event.key() == Qt.Key_Escape
                 and self._cancel_current_annotation()):
             event.accept()
