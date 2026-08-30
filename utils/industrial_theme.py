@@ -88,6 +88,7 @@ QSplitter#rightSectionSplitter {
 }
 
 QSplitter#workspaceSplitter,
+QSplitter#contentSectionSplitter,
 QWidget#queueSection,
 QWidget#canvasSection,
 QWidget#workspaceContentSection {

@@ -325,6 +325,12 @@ class BackgroundGlassPanel(QWidget):
         painter = QPainter(self)
         self.background_host.draw_background_for(painter, self)
         painter.fillRect(self.rect(), self.tint)
+        if self.property('panelFrame'):
+            frame_pen = QPen(QColor(105, 126, 139, 135))
+            frame_pen.setWidthF(1.0)
+            painter.setPen(frame_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5))
         painter.end()
 
 

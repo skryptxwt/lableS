@@ -322,9 +322,11 @@ class MainWin(QMainWindow):
         self.ui.thumbnailWidget.setFrameShape(QListWidget.NoFrame)
         self.ui.label_2.setMinimumWidth(0)
         self.ui.label_2.setMaximumWidth(16777215)
-        for widget in (self.ui.clsShow, self.ui.labelShow, self.ui.label_3, self.ui.label_5):
-            widget.setMinimumWidth(210)
-            widget.setMaximumWidth(210)
+        for widget in (
+                self.ui.clsShow, self.ui.labelShow,
+                self.ui.label_3, self.ui.label_5):
+            widget.setMinimumWidth(0)
+            widget.setMaximumWidth(16777215)
         for list_widget in (self.ui.labelShow, self.ui.clsShow):
             # Remove legacy Designer minimum heights (358/359 px). They make
             # the list overflow a resized inspector section and truncate its
@@ -371,7 +373,7 @@ class MainWin(QMainWindow):
             label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             label.setStyleSheet(
                 'color: #263640; background: rgba(245, 248, 250, 168); border: 0; '
-                'border-bottom: 1px solid rgba(122, 143, 154, 105); padding: 0 12px; '
+                'border-bottom: 1px solid rgba(105, 127, 139, 165); padding: 0 12px; '
                 'font-size: 12px; font-weight: 600;')
 
         self.ui.renewCls.setText('类别管理')
@@ -627,9 +629,12 @@ class MainWin(QMainWindow):
         self.right_splitter.setObjectName('rightSectionSplitter')
         self.right_splitter.setAttribute(Qt.WA_StyledBackground, True)
         self.right_splitter.setChildrenCollapsible(False)
+        self.right_splitter.setMinimumWidth(190)
+        self.right_splitter.setMaximumWidth(520)
 
         self.object_section = BackgroundGlassPanel(
             self.window_shell, self.right_splitter)
+        self.object_section.setProperty('panelFrame', True)
         self.object_section.setMinimumHeight(90)
         object_layout = QVBoxLayout(self.object_section)
         object_layout.setContentsMargins(0, 0, 0, 0)
@@ -639,6 +644,7 @@ class MainWin(QMainWindow):
 
         self.class_section = BackgroundGlassPanel(
             self.window_shell, self.right_splitter)
+        self.class_section.setProperty('panelFrame', True)
         self.class_section.setMinimumHeight(90)
         class_layout = QVBoxLayout(self.class_section)
         class_layout.setContentsMargins(0, 0, 0, 0)
@@ -655,11 +661,12 @@ class MainWin(QMainWindow):
         self.queue_section = BackgroundGlassPanel(
             self.window_shell, self.ui.centralwidget)
         self.queue_section.setObjectName('queueSection')
+        self.queue_section.setProperty('panelFrame', True)
         self.queue_section.setMinimumWidth(212)
         self.queue_section.setMaximumWidth(520)
         queue_layout = QVBoxLayout(self.queue_section)
         queue_layout.setContentsMargins(0, 0, 0, 0)
-        queue_layout.setSpacing(6)
+        queue_layout.setSpacing(0)
         queue_layout.addWidget(self.ui.label_2)
         queue_layout.addWidget(self.ui.thumbnailWidget, 1)
 
@@ -699,9 +706,19 @@ class MainWin(QMainWindow):
         content_section.setObjectName('workspaceContentSection')
         content_layout = QHBoxLayout(content_section)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(8)
-        content_layout.addWidget(self.canvas_section, 1)
-        content_layout.addWidget(self.right_splitter)
+        content_layout.setSpacing(0)
+
+        self.content_splitter = AdjustableSplitter(
+            Qt.Horizontal, content_section,
+            background_host=self.window_shell)
+        self.content_splitter.setObjectName('contentSectionSplitter')
+        self.content_splitter.setChildrenCollapsible(False)
+        self.content_splitter.addWidget(self.canvas_section)
+        self.content_splitter.addWidget(self.right_splitter)
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(1, 0)
+        self.content_splitter.setSizes([900, 220])
+        content_layout.addWidget(self.content_splitter)
 
         self.workspace_splitter = AdjustableSplitter(
             Qt.Horizontal, self.ui.centralwidget,
@@ -1066,6 +1083,7 @@ class MainWin(QMainWindow):
         self.move(target)
         self.right_splitter.setSizes([1, 1])
         self.workspace_splitter.setSizes([236, max(1, width - 250)])
+        self.content_splitter.setSizes([max(1, width - 500), 220])
 
         self._save_background_config(
             background_image='', background_opacity=65, thumbnail_size=80)
