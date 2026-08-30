@@ -504,6 +504,9 @@ class TitleBar(QWidget):
 
         self.title_label = QLabel('LabelS')
         self.title_label.setObjectName('windowTitleLabel')
+        self.title_label.setMinimumWidth(48)
+        self.title_label.setSizePolicy(
+            QSizePolicy.Minimum, QSizePolicy.Fixed)
         self.layout.addWidget(self.title_label)
         self.layout.addSpacing(18)
 

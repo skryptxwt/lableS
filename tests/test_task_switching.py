@@ -10,6 +10,10 @@ from utils.mainWindow import MainWin
 
 
 class TaskSwitchingTest(unittest.TestCase):
+    def test_toolbar_width_includes_text_padding(self):
+        self.assertEqual(MainWin._toolbar_control_width(82, 88), 106)
+        self.assertEqual(MainWin._toolbar_control_width(40, 88), 88)
+
     def test_existing_labels_block_switch_without_native_dialog(self):
         messages = []
         action = SimpleNamespace(setChecked=lambda checked: None)

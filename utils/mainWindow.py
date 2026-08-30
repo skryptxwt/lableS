@@ -578,14 +578,15 @@ class MainWin(QMainWindow):
 
         self.save_label.setProperty('role', 'primary')
         self.deleteBox.setProperty('role', 'danger')
-        top_button_widths = {
+        self._toolbar_min_widths = {
             self.ui.renewCls: 66,
             self.ui.load_model: 82,
             self.ui.save_5: 78,
             self.task_button: 88,
+            self.background_button: 62,
         }
-        for button, width in top_button_widths.items():
-            button.setFixedSize(width, 24)
+        for button in self._toolbar_min_widths:
+            button.setFixedHeight(24)
             button.setProperty('toolbarControl', True)
             self.ui.horizontalLayout_6.setAlignment(button, Qt.AlignVCenter)
 
@@ -728,6 +729,7 @@ class MainWin(QMainWindow):
         self._build_shortcut_menu()
         self.ui.save_5.clicked.connect(self.show_shortcut_menu)
         self.setStyleSheet(INDUSTRIAL_QSS)
+        self._sync_title_toolbar_widths()
 
         # The legacy .ui palette is black.  Using CSS ``transparent`` makes
         # Fusion composite that palette into a black tile on some backends,
@@ -810,6 +812,20 @@ class MainWin(QMainWindow):
         position.setY(position.y() + 5)
         self.background_menu.popup(position)
 
+    @staticmethod
+    def _toolbar_control_width(text_width, minimum_width, padding=24):
+        """Keep title-bar text intact across fonts and display scaling."""
+        return max(int(minimum_width), int(text_width) + int(padding))
+
+    def _sync_title_toolbar_widths(self, button=None):
+        buttons = ((button,) if button is not None
+                   else tuple(self._toolbar_min_widths))
+        for control in buttons:
+            text_width = control.fontMetrics().horizontalAdvance(
+                control.text())
+            control.setFixedWidth(self._toolbar_control_width(
+                text_width, self._toolbar_min_widths.get(control, 0)))
+
     def show_task_menu(self):
         position = self.task_button.mapToGlobal(
             self.task_button.rect().bottomLeft())
@@ -835,6 +851,7 @@ class MainWin(QMainWindow):
         previous_label = self.img.label_path if self.img_is_load and self.img else None
         self.annotation_task = task
         self.task_button.setText(f'任务：{labels[task]}  ▾')
+        self._sync_title_toolbar_widths(self.task_button)
         self.task_actions[task].setChecked(True)
         self._reset_task_interaction()
         if persist:
