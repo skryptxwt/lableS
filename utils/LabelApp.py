@@ -16,8 +16,17 @@ class LabelApp(QWidget):
         context = []
 
         if is_choose is not None:
-            self.listWidget.item(self.main_window.is_choose_rect_index).setText(
-                f'{self.main_window.is_choose_rect_index} : {is_choose}')
+            try:
+                index = int(box_cls_index)
+            except (TypeError, ValueError, OverflowError):
+                return
+            item = self.listWidget.item(index)
+            if item is None:
+                self.set_rect_box(index)
+                item = self.listWidget.item(index)
+            if item is not None:
+                item.setText(f' {index + 1} : {is_choose}')
+                self.listWidget.setCurrentRow(index)
             return
         for i, label in enumerate(self.main_window.img.label_save):
             context.append(f' {i+1} : {self.main_window.names[label[0]]}')
@@ -26,10 +35,12 @@ class LabelApp(QWidget):
         # 默认选择第一个类别，并更改QLabel为对应的索引
         if box_cls_index is not None:
             self.listWidget.setCurrentRow(box_cls_index)
+        self.main_window._sync_object_delete_button()
 
     def clear(self):
         self.set_rect_box()
         self.listWidget.clearSelection()
+        self.main_window._sync_object_delete_button()
 
     def changeLabel(self, item):
         """更改标签内容为点击的类别索引"""
@@ -46,3 +57,4 @@ class LabelApp(QWidget):
         self.set_rect_box(currentIndex)
         self.index = currentIndex
         self.main_window.is_choose_rect_index = currentIndex
+        self.main_window._sync_object_delete_button()

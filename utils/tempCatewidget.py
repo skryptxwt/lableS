@@ -1,18 +1,28 @@
+import logging
 import yaml
 from PyQt5 import uic
-from PyQt5.QtCore import QRectF, QSize, Qt
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
-from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout,
-                             QLabel, QListWidgetItem, QPushButton, QWidget)
+from PyQt5.QtCore import QRectF, QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap
+from PyQt5.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel,
+                             QListWidgetItem, QPushButton, QShortcut, QWidget)
 
 from .class_styles import mapping_value, normalize_class_style
 from .common_fun import CONFIG_PATH, root
 from .industrial_theme import INDUSTRIAL_QSS
 
 
+LOGGER = logging.getLogger('labels')
+
+
 class CategoryApp(QWidget):
     def __init__(self, main_window, widget):
-        super().__init__()
+        # Keep the picker inside the existing application window.  A native
+        # Qt.Popup starts a second Windows focus/activation loop; when it is
+        # created from a canvas double-click that loop can deadlock with the
+        # trailing mouse release.  A child overlay has the same appearance and
+        # interaction without creating another native window.
+        host = getattr(main_window, 'window_shell', main_window)
+        super().__init__(host)
         self.label = None
         self.main_window = main_window
         self.listWidget = uic.loadUi(str(root / "qt_ui_file/temp_widget.ui"), self).clsShow
@@ -20,12 +30,11 @@ class CategoryApp(QWidget):
         self.category_entries = []
         self.index = None
         self.cls_index = None
-        # Qt.Popup provides native outside-click dismissal, which is essential
-        # for task modes whose canvas events are handled by a separate filter.
-        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setWindowFlags(Qt.Widget)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setObjectName('categoryPopup')
+        self._dismiss_pending = False
 
         popup_layout = self.layout()
         popup_layout.removeWidget(self.listWidget)
@@ -46,7 +55,10 @@ class CategoryApp(QWidget):
         self.close_button.setObjectName('categoryPopupClose')
         self.close_button.setFixedSize(24, 24)
         self.close_button.setToolTip('关闭')
-        self.close_button.clicked.connect(self.close)
+        self.close_button.clicked.connect(self.dismiss)
+        self.escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self.escape_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.escape_shortcut.activated.connect(self.dismiss)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.current_badge)
@@ -135,56 +147,83 @@ class CategoryApp(QWidget):
         index = self.main_window.is_choose_rect_index
 
         image = getattr(self.main_window, 'img', None)
+        label_save = getattr(image, 'label_save', ())
+        basedata = getattr(image, 'basedata', ())
         if (image is None or index is None or index < 0
-                or index >= len(image.basedata)):
+                or index >= len(label_save)
+                or index >= len(basedata)):
             status_bar = getattr(self.main_window, 'statusBar', None)
             if callable(status_bar):
                 status_bar().showMessage(
                     'CATEGORY  |  当前没有可调整类别的标注对象', 4000)
-            self.close()
+            self.dismiss(deferred=True)
             return
-        # self.main_window.is_hover_move_allow = True
-        self.cls_index = int(item.data(Qt.UserRole))
-        class_name = mapping_value(
-            self.main_window.names, self.cls_index) or str(self.cls_index)
-        self.main_window.boxShowWidget.set_rect_box(index, class_name)
+        try:
+            class_data = item.data(Qt.UserRole)
+            if class_data is None:
+                raise ValueError('类别项缺少类别 ID')
+            self.cls_index = int(class_data)
+            class_name = mapping_value(
+                self.main_window.names, self.cls_index) or str(self.cls_index)
 
-        self.main_window.img.is_trans = False
-        # self.main_window.img.only_index = True
-        new_label = self.main_window.img.label_save[index]
-        new_label[0] = int(self.cls_index)
-        self.main_window.img.change(index, new_label)
+            self.main_window.img.is_trans = False
+            new_label = list(self.main_window.img.label_save[index])
+            new_label[0] = self.cls_index
+            self.main_window.img.change(index, new_label)
+            self.main_window.img.save()
 
-        self.main_window.img.save()
-        self.main_window.change_label_name = False
-
-        self.main_window.cls = int(self.cls_index)
-        self.main_window.categoryShowWidget.set_rect_cls(self.cls_index)
-
-        self.close()
+            self.main_window.cls = self.cls_index
+            self.main_window.boxShowWidget.set_rect_box(index, class_name)
+            self.main_window.categoryShowWidget.set_rect_cls(self.cls_index)
+        except Exception:
+            LOGGER.exception(
+                'Category change failed | index=%s class=%s task=%s',
+                index, getattr(self, 'cls_index', None),
+                getattr(self.main_window, 'annotation_task', None))
+            self.main_window.statusBar().showMessage(
+                'CATEGORY CHANGE RECOVERED  |  修改失败，错误已写入日志',
+                8000)
+        finally:
+            self.main_window.change_label_name = False
+            # itemClicked is still executing here.  Defer hiding until Qt has
+            # unwound the QListWidget signal stack; closing or deleting the
+            # active event receiver here can access freed native state on
+            # Windows.
+            self.dismiss(deferred=True)
 
     def show_at(self, global_position):
-        """Show beside the annotation while keeping the popup on screen."""
-        self.show()
-        screen = QApplication.screenAt(global_position)
-        if screen is None:
-            screen = QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen else None
-        x = global_position.x() + 12
-        y = global_position.y() + 12
-        if available is not None:
+        """Show beside the annotation as a clipped in-window overlay."""
+        self._dismiss_pending = False
+        host = self.parentWidget()
+        position = (host.mapFromGlobal(global_position)
+                    if host is not None else global_position)
+        x = position.x() + 12
+        y = position.y() + 12
+        if host is not None:
+            available = host.rect()
             x = min(max(x, available.left() + 8),
-                    available.right() - self.width() - 8)
+                    max(available.left() + 8,
+                        available.right() - self.width() - 8))
             y = min(max(y, available.top() + 8),
-                    available.bottom() - self.height() - 8)
+                    max(available.top() + 8,
+                        available.bottom() - self.height() - 8))
         self.move(x, y)
+        LOGGER.info(
+            'Category popup show | index=%s class=%s position=(%s, %s)',
+            self.index, self.cls_index, x, y)
+        # This is a child overlay, so show/raise never enters the Windows
+        # top-level popup activation loop.
+        self.show()
         self.raise_()
-        self.activateWindow()
-        self.listWidget.setFocus(Qt.PopupFocusReason)
+        QTimer.singleShot(0, self._focus_category_list)
+
+    def _focus_category_list(self):
+        if self.isVisible():
+            self.listWidget.setFocus(Qt.OtherFocusReason)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
-            self.close()
+            self.dismiss()
             return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             item = self.listWidget.currentItem()
@@ -193,16 +232,37 @@ class CategoryApp(QWidget):
             return
         super().keyPressEvent(event)
 
+    def dismiss(self, deferred=False):
+        """Hide this reusable overlay outside the current item callback."""
+        if deferred:
+            if self._dismiss_pending:
+                return
+            self._dismiss_pending = True
+            QTimer.singleShot(0, self.dismiss)
+            return
+        self._dismiss_pending = False
+        LOGGER.info(
+            'Category popup hide | index=%s class=%s',
+            self.index, self.cls_index)
+        self.main_window.change_label_name = False
+        if getattr(self.main_window, 'temp_widget', None) is self:
+            self.main_window.temp_widget = None
+        self.hide()
+
     def closeEvent(self, event):
+        LOGGER.info(
+            'Category popup close | index=%s class=%s',
+            self.index, self.cls_index)
         self.main_window.change_label_name = False
         if getattr(self.main_window, 'temp_widget', None) is self:
             self.main_window.temp_widget = None
         super().closeEvent(event)
 
     def focusOutEvent(self, event):
+        # The canvas event filter, close button and Esc own dismissal.  Do not
+        # close from focus callbacks: focus may legitimately move between the
+        # list and close button inside this overlay.
         super().focusOutEvent(event)
-        if not self.isActiveWindow():
-            self.close()
 
     def paintEvent(self, event):
         # A translucent top-level QWidget is not guaranteed to paint its QSS

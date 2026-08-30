@@ -180,9 +180,10 @@ class Image(QMainWindow):
                  point_color, box_thickness=3, circle_radius=1,
                  text_size=8, is_show_nine_circle=True, is_over_striking=False,
                  text_color=None, text_position='outside_top_left',
-                 painter=None) -> None:
+                 selected_border_extra=2, painter=None) -> None:
         border_color, box_thickness = display_border(
-            border_color, box_thickness, is_over_striking)
+            border_color, box_thickness, is_over_striking,
+            selected_border_extra)
 
         pixmap = self.screen_label.pixmap()
         if pixmap is None:
@@ -345,7 +346,9 @@ class Image(QMainWindow):
     def label_show(self, index=None, pixmap=None, commit=True,
                    excluded_index=None):
         if self.task != 'detect':
-            self._label_show_task(index, pixmap=pixmap, commit=commit)
+            self._label_show_task(
+                index, pixmap=pixmap, commit=commit,
+                excluded_index=excluded_index)
             return
         if self.only_index and index is not None and self.show_other:
             selected_index = self._normalized_index(index, len(self.label_save))
@@ -382,7 +385,9 @@ class Image(QMainWindow):
                     circle_radius=style['handle_size'],
                     text_size=style['text_size'],
                     is_over_striking=True, text_color=style['text'],
-                    text_position=style['text_position'], painter=painter)
+                    text_position=style['text_position'],
+                    selected_border_extra=style['selected_border_extra'],
+                    painter=painter)
             finally:
                 painter.end()
             if commit:
@@ -431,7 +436,9 @@ class Image(QMainWindow):
                         text_size=style['text_size'],
                         is_over_striking=selected_index == label_index,
                         text_color=style['text'],
-                        text_position=style['text_position'], painter=painter)
+                        text_position=style['text_position'],
+                        selected_border_extra=style['selected_border_extra'],
+                        painter=painter)
             finally:
                 painter.end()
             if commit:
@@ -452,9 +459,12 @@ class Image(QMainWindow):
             return self.parent.names[class_id]
         return str(class_id)
 
-    def _label_show_task(self, index=None, pixmap=None, commit=True):
+    def _label_show_task(self, index=None, pixmap=None, commit=True,
+                         excluded_index=None):
         label_count = len(self.label_save)
         selected_index = self._normalized_index(index, label_count)
+        excluded_index = self._normalized_index(
+            excluded_index, label_count)
         if self.only_index and self.show_other and selected_index is not None:
             order = [selected_index]
         else:
@@ -466,6 +476,8 @@ class Image(QMainWindow):
         self._enable_quality_rendering(painter)
         try:
             for label_index in order:
+                if label_index == excluded_index:
+                    continue
                 label = self.label_save[label_index]
                 style = self._class_style(label[0])
                 selected = label_index == selected_index
@@ -489,7 +501,8 @@ class Image(QMainWindow):
         if len(points) < 2:
             return
         border, width = display_border(
-            style['border'], style['border_width'], selected)
+            style['border'], style['border_width'], selected,
+            style['selected_border_extra'])
         painter.setPen(self._annotation_pen(border, width))
         painter.setBrush(
             QColor(*style['fill']) if self.show_box_fill else Qt.NoBrush)
@@ -1127,7 +1140,9 @@ class Image(QMainWindow):
         style = self._class_style(self.parent.cls if self.parent else 0)
         border, width = display_border(style['border'], 2, True)
         painter.setPen(self._annotation_pen(border, width, Qt.DashLine))
-        painter.setBrush(QColor(*style['fill']))
+        fill_brush = (QColor(*style['fill'])
+                      if self.show_box_fill else Qt.NoBrush)
+        painter.setBrush(fill_brush)
         if points:
             canvas_points = [QPointF(*self.org_xy_to_new_xy(point))
                              for point in points]
@@ -1151,6 +1166,7 @@ class Image(QMainWindow):
                 close_radius = max(9.0, handle_radius + 4)
                 painter.drawEllipse(canvas_points[0], close_radius, close_radius)
         if bbox is not None:
+            painter.setBrush(fill_brush)
             p1 = QPointF(*self.org_xy_to_new_xy(bbox[:2]))
             p2 = QPointF(*self.org_xy_to_new_xy(bbox[2:]))
             painter.drawRect(QRectF(p1, p2).normalized())

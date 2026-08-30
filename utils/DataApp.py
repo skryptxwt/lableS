@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -6,12 +7,15 @@ from tempfile import NamedTemporaryFile
 class DataApp:
     TASKS = ('detect', 'segment', 'obb', 'pose')
 
-    def __init__(self, label_path, task='detect', kpt_shape=(17, 3)):
+    def __init__(self, label_path, task='detect', kpt_shape=(17, 3),
+                 accept_prediction_output=False):
         self.label_path = Path(label_path)
         if task not in self.TASKS:
             raise ValueError(f'不支持的标注任务: {task}')
         self.task = task
         self.kpt_shape = self._normalize_kpt_shape(kpt_shape)
+        self.accept_prediction_output = bool(accept_prediction_output)
+        self.normalized_prediction_rows = 0
         self.data = []
         self.load_data_from_path(self.label_path)
 
@@ -37,12 +41,36 @@ class DataApp:
                 context = [float(value) for value in parts]
             except ValueError as exc:
                 raise ValueError(f'{label_path}:{line_number} 包含非数字字段') from exc
+            context = self._normalize_prediction_output(context)
             try:
                 self._validate(context)
             except ValueError as exc:
                 raise ValueError(f'{label_path}:{line_number} {exc}') from exc
             context[0] = int(context[0])
             self.data.append(context)
+
+    def _normalize_prediction_output(self, data):
+        """Convert Ultralytics pose confidences to YOLO visibility values."""
+        if (not self.accept_prediction_output or self.task != 'pose'
+                or self.kpt_shape[1] != 3):
+            return data
+        expected = 5 + self.kpt_shape[0] * self.kpt_shape[1]
+        if len(data) != expected:
+            return data
+        visibility_indices = range(7, expected, 3)
+        values = [float(data[index]) for index in visibility_indices]
+        # Native training labels already use the discrete 0/1/2 convention.
+        # A fractional value identifies Results.save_txt() prediction output,
+        # whose third keypoint component is confidence instead.
+        if all(value in (0, 1, 2) for value in values):
+            return data
+        if any(not 0 <= value <= 1 for value in values):
+            return data
+        normalized = list(data)
+        for index, confidence in zip(visibility_indices, values):
+            normalized[index] = 2 if confidence >= 0.5 else 1
+        self.normalized_prediction_rows += 1
+        return normalized
 
     def _validate(self, data):
         lengths = {
@@ -120,7 +148,18 @@ class DataApp:
                 file.flush()
                 os.fsync(file.fileno())
                 temp_path = Path(file.name)
-            os.replace(temp_path, self.label_path)
+            # On Windows an antivirus/indexer may briefly open the existing
+            # label between fsync and replace.  Retrying this short sharing
+            # violation prevents a mouse-release save from escaping the Qt
+            # callback and leaving the editor in a pressed/dragging state.
+            for attempt in range(4):
+                try:
+                    os.replace(temp_path, self.label_path)
+                    break
+                except PermissionError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(0.015 * (2 ** attempt))
         finally:
             if temp_path is not None and temp_path.exists():
                 temp_path.unlink()

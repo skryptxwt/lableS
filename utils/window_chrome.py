@@ -330,7 +330,18 @@ class BackgroundGlassPanel(QWidget):
             frame_pen.setWidthF(1.0)
             painter.setPen(frame_pen)
             painter.setBrush(Qt.NoBrush)
-            painter.drawRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5))
+            frame = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
+            if self.objectName() == 'queueSection':
+                # Its right edge is supplied by the adjacent splitter. Avoid
+                # stacking a panel stroke and a divider into one dark stripe.
+                path = QPainterPath()
+                path.moveTo(frame.right(), frame.top())
+                path.lineTo(frame.left(), frame.top())
+                path.lineTo(frame.left(), frame.bottom())
+                path.lineTo(frame.right(), frame.bottom())
+                painter.drawPath(path)
+            else:
+                painter.drawRect(frame)
         painter.end()
 
 
@@ -412,9 +423,9 @@ class IndustrialSplitterHandle(QSplitterHandle):
         # not communicate on its own.
         splitter_name = self.splitter().objectName()
         is_queue_boundary = splitter_name == 'workspaceSplitter'
-        divider_thickness = 3 if is_queue_boundary else 1
-        divider_color = (QColor(37, 155, 200, 225) if self.hovered
-                         else QColor(53, 73, 84, 245)
+        divider_thickness = 1
+        divider_color = (QColor(37, 155, 200, 205) if self.hovered
+                         else QColor(105, 126, 139, 145)
                          if is_queue_boundary
                          else QColor(101, 122, 134, 145))
         if self.orientation() == Qt.Vertical:
@@ -431,7 +442,23 @@ class IndustrialSplitterHandle(QSplitterHandle):
             divider = QRectF(
                 divider_x, 0,
                 divider_thickness, self.height())
-        painter.fillRect(divider, divider_color)
+        if is_queue_boundary and self.orientation() == Qt.Horizontal:
+            # Blend the queue edge into the resize hit area instead of
+            # presenting it as a permanent rule. The affordance becomes more
+            # visible only while the pointer is over the boundary.
+            fade_width = min(7.0, float(self.width()))
+            edge_fade = QLinearGradient(0, 0, fade_width, 0)
+            if self.hovered:
+                edge_fade.setColorAt(0.0, QColor(37, 155, 200, 145))
+                edge_fade.setColorAt(0.45, QColor(37, 155, 200, 54))
+            else:
+                edge_fade.setColorAt(0.0, QColor(75, 96, 108, 78))
+                edge_fade.setColorAt(0.45, QColor(75, 96, 108, 30))
+            edge_fade.setColorAt(1.0, QColor(75, 96, 108, 0))
+            painter.fillRect(
+                QRectF(0, 0, fade_width, self.height()), edge_fade)
+        else:
+            painter.fillRect(divider, divider_color)
 
         if self.orientation() == Qt.Vertical:
             grip_width = min(38, max(18, self.width() - 12))
@@ -447,12 +474,15 @@ class IndustrialSplitterHandle(QSplitterHandle):
             grip = QRectF(
                 grip_x,
                 (self.height() - grip_height) / 2,
-                3,
+                (2 if self.hovered else 1) if is_queue_boundary else 3,
                 grip_height)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(
-            QColor('#249bc8') if self.hovered else QColor('#758792'))
-        painter.drawRoundedRect(grip, 1.5, 1.5)
+        painter.setBrush(QColor(36, 154, 199, 225) if self.hovered
+                         else QColor(105, 126, 139, 145)
+                         if is_queue_boundary
+                         else QColor('#758792'))
+        if not is_queue_boundary or self.hovered:
+            painter.drawRoundedRect(grip, 1.5, 1.5)
 
 
 class AdjustableSplitter(QSplitter):

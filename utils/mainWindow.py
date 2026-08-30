@@ -1,13 +1,14 @@
 import os
-import shutil
 import sys
 import math
+import logging
+import time
 import yaml
 from pathlib import Path
 
 from PyQt5 import uic, QtGui
-from PyQt5.QtCore import Qt, QEvent, QTimer, QSize
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import QPoint, Qt, QEvent, QTimer, QSize
+from PyQt5.QtGui import QIntValidator, QKeySequence
 from PyQt5.QtWidgets import (QMainWindow, QFileDialog, QListWidget, QMessageBox,
                              QColorDialog, QShortcut, QWidget, QVBoxLayout,
                              QPushButton, QButtonGroup, QSplitter,
@@ -15,7 +16,7 @@ from PyQt5.QtWidgets import (QMainWindow, QFileDialog, QListWidget, QMessageBox,
                              QWidgetAction, QLabel, QSlider, QHBoxLayout,
                              QApplication, QDialog, QDialogButtonBox,
                              QKeySequenceEdit, QActionGroup, QLineEdit,
-                             QSpinBox, QComboBox)
+                             QSpinBox, QComboBox, QProgressBar)
 
 from .CategoryApp import CategoryApp
 from .tempCatewidget import CategoryApp as tempWidget
@@ -27,12 +28,15 @@ from .modificationCls import modificationCls
 from .common_fun import CONFIG_PATH, distance, root
 from .class_styles import build_class_styles, normalize_class_style
 from .industrial_theme import INDUSTRIAL_QSS
+from .io_workers import (ImageScanWorker, LabelExportWorker,
+                         LabelImportWorker, merge_label_file)
 from .ui_icons import toolbar_icon
 from .window_chrome import (AdjustableSplitter, BackgroundGlassPanel,
                             BackgroundViewportBinder, BackgroundWidget,
                             TitleBar)
 
 root = root.parent
+LOGGER = logging.getLogger('labels')
 
 DEFAULT_SHORTCUTS = {
     'previous_image': ('上一张图片', 'Z'),
@@ -82,6 +86,7 @@ class MainWin(QMainWindow):
         self.thumbnail_preview_size = 80
 
         self.temp_widget = None
+        self._category_picker = None
 
         # *** 用来显示选中哪个框,用来切换框 ***
         self.boxShowWidget = LabelApp(self)
@@ -175,6 +180,8 @@ class MainWin(QMainWindow):
         self.detect_drag_original = None
         self.detect_drag_start_org = None
         self._ignore_left_release = False
+        self._ignored_release_request_id = None
+        self._category_picker_request_id = 0
 
         self.is_update_label = False  # 是否正在更新框的label
         self.is_update_label_save = None  # 保存更新框的label的信息 [box_index, img.label_save[index], img.basedata[index]]
@@ -227,6 +234,10 @@ class MainWin(QMainWindow):
         self.load_model_thread = None
         self.detect_thread = None
         self._detect_target = None
+        self._io_worker = None
+        self._io_operation = None
+        self._pending_image_mode = None
+        self._pending_image_payload = None
         self._background_initialized = False
         self._modification_window = None
         self._resize_timer = QTimer(self)
@@ -236,15 +247,19 @@ class MainWin(QMainWindow):
         self._obb_save_timer.setSingleShot(True)
         self._obb_save_timer.setInterval(240)
         self._obb_save_timer.timeout.connect(self._save_obb_wheel_change)
-        # 高频 MouseMove 只保留最新一帧，避免整张画布重绘请求排队。
-        # 采用稳定的 60 FPS，防止大图或多标注场景下 120 FPS 占满主线程。
+        # 高频 MouseMove 只保留最新一帧。首帧立即绘制，后续最多按
+        # 120 FPS 合并，避免固定等待一整帧造成明显的“拖手”感。
         self._interaction_redraw_timer = QTimer(self)
         self._interaction_redraw_timer.setSingleShot(True)
         self._interaction_redraw_timer.setTimerType(Qt.PreciseTimer)
-        self._interaction_redraw_timer.setInterval(16)
+        self._interaction_redraw_timer.setInterval(8)
         self._interaction_redraw_timer.timeout.connect(
             self._flush_interaction_redraw)
         self._pending_interaction_redraw = None
+        self._interaction_frame_interval_ms = 8.0
+        self._last_interaction_redraw_at = 0.0
+        self._interaction_base_frame = None
+        self._interaction_base_key = None
 
         # ———————————————————————————————— 初始化 ————————————————————————————————#
         self._apply_industrial_ui()
@@ -294,7 +309,7 @@ class MainWin(QMainWindow):
         self.label.setText('NO IMAGE LOADED\n\nOPEN A FILE OR DATASET TO START')
         self.current_label_name_show.setFixedHeight(28)
         self.current_label_name_show.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Fixed)
+            QSizePolicy.Preferred, QSizePolicy.Fixed)
 
         self.ui.thumbnailWidget.setMinimumWidth(0)
         self.ui.thumbnailWidget.setMaximumWidth(16777215)
@@ -324,6 +339,43 @@ class MainWin(QMainWindow):
             QAbstractItemView.ScrollPerItem)
         self.ui.clsShow.setVerticalScrollMode(
             QAbstractItemView.ScrollPerItem)
+
+        # The Designer file used a native-looking black scroll rail.  Apply
+        # the rail directly to each list's QScrollBar so a later viewport or
+        # list style cannot make the old arrows/black palette visible again.
+        list_scrollbar_style = (
+            'QScrollBar:vertical {'
+            ' width: 8px; margin: 0; background: #dce4e8;'
+            ' border: 0; border-radius: 4px; }'
+            'QScrollBar::handle:vertical {'
+            ' min-height: 38px; margin: 3px 1px; background: #8299a5;'
+            ' border: 0; border-radius: 3px; }'
+            'QScrollBar::handle:vertical:hover {'
+            ' background: #3b9abe; }'
+            'QScrollBar::handle:vertical:pressed {'
+            ' background: #1884ae; }'
+            'QScrollBar::sub-line:vertical {'
+            ' height: 0; subcontrol-origin: margin;'
+            ' subcontrol-position: top; border: 0; background: #dce4e8; }'
+            'QScrollBar::add-line:vertical {'
+            ' height: 0; subcontrol-origin: margin;'
+            ' subcontrol-position: bottom; border: 0; background: #dce4e8; }'
+            'QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {'
+            ' width: 0; height: 0; border: 0; image: none; background: #dce4e8; }'
+            'QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {'
+            ' border: 0; background: #dce4e8; }')
+        for list_widget in (
+                self.ui.thumbnailWidget, self.ui.labelShow, self.ui.clsShow):
+            scroll_bar = list_widget.verticalScrollBar()
+            scroll_bar.setStyleSheet(list_scrollbar_style)
+            scroll_bar.setAutoFillBackground(True)
+            scroll_bar.setAttribute(Qt.WA_TranslucentBackground, False)
+            scroll_palette = scroll_bar.palette()
+            rail_color = QtGui.QColor('#dce4e8')
+            scroll_palette.setColor(QtGui.QPalette.Window, rail_color)
+            scroll_palette.setColor(QtGui.QPalette.Base, rail_color)
+            scroll_palette.setColor(QtGui.QPalette.Button, rail_color)
+            scroll_bar.setPalette(scroll_palette)
 
         self.ui.thumbnailWidget.viewport().setObjectName(
             'transparentListViewport')
@@ -376,6 +428,11 @@ class MainWin(QMainWindow):
         self.task_button.clicked.connect(self.show_task_menu)
         self.task_menu = QMenu(self)
         self.task_menu.setObjectName('taskMenu')
+        task_menu_font = QtGui.QFont('Microsoft YaHei UI')
+        task_menu_font.setPointSize(9)
+        task_menu_font.setWeight(QtGui.QFont.Normal)
+        task_menu_font.setBold(False)
+        self.task_menu.setFont(task_menu_font)
         self.task_action_group = QActionGroup(self)
         self.task_action_group.setExclusive(True)
         self.task_actions = {}
@@ -384,6 +441,7 @@ class MainWin(QMainWindow):
                 ('obb', 'OBB 旋转框'), ('pose', '关键点')):
             action = self.task_menu.addAction(label)
             action.setCheckable(True)
+            action.setFont(task_menu_font)
             action.setData(task)
             action.triggered.connect(
                 lambda _checked=False, value=task: self.set_annotation_task(value))
@@ -392,6 +450,7 @@ class MainWin(QMainWindow):
         self.task_actions['detect'].setChecked(True)
         self.task_menu.addSeparator()
         self.keypoint_config_action = self.task_menu.addAction('关键点配置…')
+        self.keypoint_config_action.setFont(task_menu_font)
         self.keypoint_config_action.triggered.connect(
             self.configure_keypoints)
 
@@ -618,7 +677,44 @@ class MainWin(QMainWindow):
         object_layout = QVBoxLayout(self.object_section)
         object_layout.setContentsMargins(0, 0, 0, 0)
         object_layout.setSpacing(0)
-        object_layout.addWidget(self.ui.label_3)
+        self.object_header = QWidget(self.object_section)
+        self.object_header.setObjectName('objectSectionHeader')
+        self.object_header.setAttribute(Qt.WA_StyledBackground, True)
+        self.object_header.setFixedHeight(34)
+        self.object_header.setStyleSheet(
+            'QWidget#objectSectionHeader {'
+            ' background: rgba(249, 251, 252, 168); border: 0;'
+            ' border-bottom: 1px solid rgba(105, 127, 139, 165); }'
+            'QPushButton#objectDeleteButton {'
+            ' min-width: 50px; max-width: 50px;'
+            ' min-height: 24px; max-height: 24px;'
+            ' color: #6d7a83; background: transparent; border: 0;'
+            ' border-radius: 5px; padding: 0 5px; font-size: 11px; }'
+            'QPushButton#objectDeleteButton:hover {'
+            ' color: #b44750; background: rgba(213, 82, 91, 38); }'
+            'QPushButton#objectDeleteButton:pressed {'
+            ' background: rgba(213, 82, 91, 70); }'
+            'QPushButton#objectDeleteButton:disabled {'
+            ' color: #a8b1b7; background: transparent; border: 0; }')
+        object_header_layout = QHBoxLayout(self.object_header)
+        object_header_layout.setContentsMargins(0, 0, 6, 0)
+        object_header_layout.setSpacing(2)
+        self.ui.label_3.setStyleSheet(
+            'color: #263640; background: transparent; border: 0; '
+            'padding: 0 12px; font-size: 12px; font-weight: 600;')
+        self.object_delete_button = QPushButton('删除', self.object_header)
+        self.object_delete_button.setObjectName('objectDeleteButton')
+        self.object_delete_button.setFixedSize(50, 24)
+        self.object_delete_button.setIcon(
+            toolbar_icon('delete', color='#71808a'))
+        self.object_delete_button.setIconSize(QSize(12, 12))
+        self.object_delete_button.setToolTip('删除当前选中的标注对象')
+        self.object_delete_button.setEnabled(False)
+        self.object_delete_button.clicked.connect(self.deleteBox_)
+        object_header_layout.addWidget(self.ui.label_3, 1)
+        object_header_layout.addWidget(
+            self.object_delete_button, 0, Qt.AlignVCenter)
+        object_layout.addWidget(self.object_header)
         object_layout.addWidget(self.ui.labelShow, 1)
 
         self.class_section = BackgroundGlassPanel(
@@ -636,6 +732,7 @@ class MainWin(QMainWindow):
         self.right_splitter.setStretchFactor(0, 1)
         self.right_splitter.setStretchFactor(1, 1)
         self.right_splitter.setSizes([420, 360])
+        self._sync_object_delete_button()
 
         self.queue_section = BackgroundGlassPanel(
             self.window_shell, self.ui.centralwidget)
@@ -671,9 +768,26 @@ class MainWin(QMainWindow):
             tint=QtGui.QColor(249, 251, 252, 178))
         self.canvas_status_section.setObjectName('canvasStatusSurface')
         self.canvas_status_section.setFixedHeight(28)
-        status_surface_layout = QVBoxLayout(self.canvas_status_section)
-        status_surface_layout.setContentsMargins(0, 0, 0, 0)
+        status_surface_layout = QHBoxLayout(self.canvas_status_section)
+        status_surface_layout.setContentsMargins(10, 2, 10, 2)
+        status_surface_layout.setSpacing(6)
+        self.image_index_input = QLineEdit(self.canvas_status_section)
+        self.image_index_input.setObjectName('imageIndexInput')
+        self.image_index_input.setValidator(QIntValidator(1, 999999999, self))
+        self.image_index_input.setAlignment(Qt.AlignCenter)
+        self.image_index_input.setFixedSize(48, 22)
+        self.image_index_input.setPlaceholderText('序号')
+        self.image_index_input.setToolTip('输入图片序号并按 Enter 跳转')
+        self.image_index_input.returnPressed.connect(
+            self._jump_to_image_index)
+        self.image_total_label = QLabel('/ 0', self.canvas_status_section)
+        self.image_total_label.setObjectName('imageTotalLabel')
+        self.image_total_label.setFixedHeight(22)
+        status_surface_layout.addStretch(1)
+        status_surface_layout.addWidget(self.image_index_input)
+        status_surface_layout.addWidget(self.image_total_label)
         status_surface_layout.addWidget(self.current_label_name_show)
+        status_surface_layout.addStretch(1)
 
         canvas_layout.addWidget(self.canvas_toolbar_section)
         canvas_layout.addWidget(self.label, 1)
@@ -703,6 +817,7 @@ class MainWin(QMainWindow):
             Qt.Horizontal, self.ui.centralwidget,
             background_host=self.window_shell)
         self.workspace_splitter.setObjectName('workspaceSplitter')
+        self.workspace_splitter.setHandleWidth(8)
         self.workspace_splitter.setChildrenCollapsible(False)
         self.workspace_splitter.addWidget(self.queue_section)
         self.workspace_splitter.addWidget(content_section)
@@ -775,8 +890,22 @@ class MainWin(QMainWindow):
             'border-radius: 5px; color: #82909b; }')
         self.current_label_name_show.setStyleSheet(
             'QLabel#character_label { background: none; border: 0; '
-            'color: #53616c; padding: 0 12px; '
+            'color: #53616c; padding: 0 3px; '
             'font-family: Consolas; font-size: 10px; }')
+        self.image_index_input.setStyleSheet(
+            'QLineEdit#imageIndexInput { color: #314550; '
+            'background: rgba(250, 252, 253, 165); '
+            'border: 1px solid rgba(111, 137, 150, 125); '
+            'border-radius: 5px; padding: 0 5px; '
+            'font-family: Consolas; font-size: 10px; } '
+            'QLineEdit#imageIndexInput:hover { '
+            'border-color: rgba(49, 143, 178, 170); } '
+            'QLineEdit#imageIndexInput:focus { color: #173440; '
+            'background: rgba(255, 255, 255, 225); '
+            'border: 1px solid #299bc5; }')
+        self.image_total_label.setStyleSheet(
+            'QLabel#imageTotalLabel { color: #53616c; background: none; '
+            'border: 0; font-family: Consolas; font-size: 10px; }')
         for surface in (
                 self.ui.temp, self.label, self.current_label_name_show):
             surface.setAttribute(Qt.WA_StyledBackground, False)
@@ -809,6 +938,17 @@ class MainWin(QMainWindow):
             list_widget.viewport().setAttribute(
                 Qt.WA_TranslucentBackground, True)
         self.statusBar().setSizeGripEnabled(False)
+        self.io_progress = QProgressBar(self)
+        self.io_progress.setObjectName('ioProgress')
+        self.io_progress.setFixedSize(180, 14)
+        self.io_progress.setTextVisible(True)
+        self.io_progress.setStyleSheet(
+            'QProgressBar { color: #31434d; background: rgba(188, 201, 209, 95); '
+            'border: 0; border-radius: 4px; font-size: 9px; text-align: center; } '
+            'QProgressBar::chunk { background: rgba(37, 155, 200, 205); '
+            'border-radius: 4px; }')
+        self.io_progress.hide()
+        self.statusBar().addPermanentWidget(self.io_progress)
         self.statusBar().showMessage('SYSTEM READY  |  Z / X 切换图片  |  C 执行检测  |  Ctrl 临时平移')
 
     def show_background_menu(self):
@@ -902,8 +1042,9 @@ class MainWin(QMainWindow):
         if hasattr(self, '_obb_save_timer'):
             self._obb_save_timer.stop()
         if hasattr(self, '_interaction_redraw_timer'):
-            self._interaction_redraw_timer.stop()
-        self._pending_interaction_redraw = None
+            self._cancel_interaction_redraw()
+        else:
+            self._pending_interaction_redraw = None
         self.task_draft_points = []
         self.task_pose_bbox = None
         self.task_pose_points = []
@@ -912,6 +1053,7 @@ class MainWin(QMainWindow):
         self.detect_drag_original = None
         self.detect_drag_start_org = None
         self._ignore_left_release = False
+        self._ignored_release_request_id = None
         self.is_add_box = False
         self.is_update_label = False
         self.is_choose_rect = False
@@ -1377,6 +1519,7 @@ class MainWin(QMainWindow):
         self.detect_drag_original = None
         self.detect_drag_start_org = None
         self._ignore_left_release = False
+        self._ignored_release_request_id = None
 
         self.label_list.clear()
         self.label_list_only_name.clear()
@@ -1433,6 +1576,16 @@ class MainWin(QMainWindow):
                                                  0 if maximized else 1,
                                                  0 if maximized else 1, 0)
             self.title_bar.maximize_button.update()
+
+    def closeEvent(self, event):
+        worker = getattr(self, '_io_worker', None)
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(1500)
+        thumbnail = getattr(self, 'thumbnail_widget', None)
+        if thumbnail is not None:
+            thumbnail.stop_loader()
+        super().closeEvent(event)
 
     def nativeEvent(self, event_type, message):
         """Restore native edge and corner resizing for the main window."""
@@ -1491,6 +1644,12 @@ class MainWin(QMainWindow):
             QEvent.MouseMove, QEvent.MouseButtonPress,
             QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick,
         )
+        if (getattr(self, '_io_operation', None) == 'labels'
+                and source is self.label
+                and event.type() in task_mouse_events):
+            self.statusBar().showMessage(
+                'LABEL IMPORT  |  标签正在合并，画布编辑暂时锁定', 2000)
+            return True
         if (self.img_is_load and self.annotation_task != 'detect'
                 and source is self.label
                 and event.type() in task_mouse_events):
@@ -1512,12 +1671,7 @@ class MainWin(QMainWindow):
                 and source is self.label
                 and event.type() == QEvent.MouseButtonDblClick
                 and event.button() == Qt.LeftButton):
-            position = self._event_canvas_pos(source, event)
-            hit_type, index, _control = self.img.hit_test(*position)
-            if hit_type is not None:
-                self._show_annotation_category_picker(
-                    index, source.mapToGlobal(event.pos()))
-            return True
+            return MainWin._handle_detect_double_click(self, source, event)
         # 鼠标移动事件
         if event.type() == QEvent.MouseMove:
             # Mouse events are local to their source widget.  Convert them to
@@ -1620,6 +1774,7 @@ class MainWin(QMainWindow):
             if event.button() == Qt.LeftButton:
                 if self._ignore_left_release:
                     self._ignore_left_release = False
+                    self._ignored_release_request_id = None
                     return True
                 if not self.img_is_load:
                     return False
@@ -1627,7 +1782,8 @@ class MainWin(QMainWindow):
                 if self.img_is_load:
                     self._interaction_redraw_timer.stop()
                     self._flush_interaction_redraw()
-                    self.img.save()
+                    self._cancel_interaction_redraw()
+                    self._save_annotations('DETECT RELEASE')
 
                 # is_first_add_box 为 False 才表示本次拖动真的创建了新框。
                 # 仅按下/松开时不能检查、更不能删除最后一个旧框。
@@ -1688,6 +1844,43 @@ class MainWin(QMainWindow):
 
         return super().eventFilter(source, event)
 
+    def _handle_detect_double_click(self, source, event):
+        """Open the class picker without letting a Qt callback escape."""
+        try:
+            position = self._event_canvas_pos(source, event)
+            hit_type, index, _control = self.img.hit_test(*position)
+            labels = getattr(self.img, 'label_save', None)
+            label_count = len(labels) if labels is not None else None
+            LOGGER.info(
+                'Detect double click | position=%s hit=%s index=%s labels=%s',
+                tuple(round(float(value), 2) for value in position),
+                hit_type, index, label_count)
+            if hit_type is None:
+                return True
+            if (not isinstance(index, int) or isinstance(index, bool)
+                    or (labels is not None and not 0 <= index < label_count)):
+                raise IndexError(f'双击命中返回了无效标注索引: {index}')
+            if labels is not None and len(labels[index]) != 5:
+                raise ValueError(
+                    f'普通检测标注应包含 5 项，实际为 {len(labels[index])} 项')
+            self._request_annotation_category_picker(
+                index, source.mapToGlobal(event.pos()))
+        except Exception:
+            LOGGER.exception(
+                'Detect double click failed | selected=%s labels=%s',
+                getattr(self, 'is_choose_rect_index', None),
+                len(getattr(getattr(self, 'img', None), 'label_save', ())))
+            MainWin._close_category_popup(self)
+            self.mouse_left_press = False
+            self.is_add_box = False
+            self.is_update_label = False
+            status_bar = getattr(self, 'statusBar', None)
+            if callable(status_bar):
+                status_bar().showMessage(
+                    'DOUBLE CLICK RECOVERED  |  类别切换失败，错误已写入日志',
+                    8000)
+        return True
+
     def _task_hand_event_filter(self, event):
         position = self._event_canvas_pos(self.label, event)
         self.mouse_pos = list(position)
@@ -1719,7 +1912,8 @@ class MainWin(QMainWindow):
                 hit = self.img.task_hit_test(*position)
                 if hit[0] is not None:
                     global_pos = self.label.mapToGlobal(event.pos())
-                    self._show_annotation_category_picker(hit[1], global_pos)
+                    self._request_annotation_category_picker(
+                        hit[1], global_pos)
                 return True
 
         if event.type() == QEvent.MouseButtonPress:
@@ -1824,13 +2018,17 @@ class MainWin(QMainWindow):
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
             if self._ignore_left_release:
                 self._ignore_left_release = False
+                self._ignored_release_request_id = None
                 return True
             self._interaction_redraw_timer.stop()
             self._flush_interaction_redraw()
             if self.task_edit is not None:
-                self.img.save()
+                self._save_annotations('TASK EDIT')
                 self.task_edit = None
                 self.mouse_left_press = False
+                self.img.only_index = False
+                self._cancel_interaction_redraw()
+                self.move_xy(index=self.is_choose_rect_index)
                 return True
             if self.task_drag is not None:
                 start = self.task_drag['start']
@@ -1841,9 +2039,12 @@ class MainWin(QMainWindow):
                 self.task_drag = None
                 self.mouse_left_press = False
                 if distance(start, end) < 12:
+                    self._cancel_interaction_redraw()
                     self._redraw_task_draft()
                     return True
                 self._finish_task_box_drag(start, end)
+                if self.annotation_task != 'pose':
+                    self._cancel_interaction_redraw()
                 return True
         return True
 
@@ -1867,6 +2068,73 @@ class MainWin(QMainWindow):
             self.img.label_save[index][0], index)
         self.move_xy(index=index)
 
+    def _request_annotation_category_picker(self, index, global_position):
+        """Open the picker after the current double-click event unwinds."""
+        self._category_picker_request_id += 1
+        request_id = self._category_picker_request_id
+        image = self.img
+        position = QPoint(global_position)
+
+        # A double click is followed by one more left-button release.  Ignore
+        # it so it cannot enter the normal edit/save path after the in-window
+        # category overlay has opened.
+        self._ignore_left_release = True
+        self._ignored_release_request_id = request_id
+        self.mouse_left_press = False
+        self.is_add_box = False
+        self.is_update_label = False
+        self.task_edit = None
+        self.task_drag = None
+        self.detect_drag_original = None
+        self.detect_drag_start_org = None
+        self._cancel_interaction_redraw()
+        if image is not None:
+            image.only_index = False
+
+        LOGGER.info(
+            'Category picker requested | request=%s task=%s index=%s labels=%s',
+            request_id, self.annotation_task, index,
+            len(getattr(image, 'label_save', ())))
+        QTimer.singleShot(
+            0, lambda: self._open_requested_category_picker(
+                request_id, image, index, position))
+        QTimer.singleShot(
+            350, lambda: self._expire_category_release_guard(request_id))
+        return True
+
+    def _expire_category_release_guard(self, request_id):
+        if (getattr(self, '_ignored_release_request_id', None)
+                == request_id):
+            self._ignore_left_release = False
+
+    def _open_requested_category_picker(
+            self, request_id, image, index, global_position):
+        """Validate a deferred picker request before creating Qt widgets."""
+        if request_id != self._category_picker_request_id:
+            return False
+        if (not self.img_is_load or self.img is not image
+                or not isinstance(index, int) or isinstance(index, bool)
+                or not 0 <= index < len(image.label_save)):
+            LOGGER.info(
+                'Category picker request discarded | request=%s index=%s',
+                request_id, index)
+            return False
+        try:
+            LOGGER.info(
+                'Category picker opening | request=%s task=%s index=%s',
+                request_id, self.annotation_task, index)
+            return self._show_annotation_category_picker(
+                index, global_position)
+        except Exception:
+            LOGGER.exception(
+                'Category picker open failed | request=%s task=%s index=%s',
+                request_id, self.annotation_task, index)
+            self._close_category_popup()
+            self.statusBar().showMessage(
+                'CATEGORY PICKER RECOVERED  |  打开失败，错误已写入日志',
+                8000)
+            return False
+
     def _show_annotation_category_picker(self, index, global_position):
         """Select an annotation and show the shared class picker beside it."""
         if not (self.img_is_load and 0 <= index < len(self.img.label_save)):
@@ -1883,24 +2151,31 @@ class MainWin(QMainWindow):
         else:
             self._select_task_annotation(index)
             self.cls = int(self.img.label_save[index][0])
-        self._close_category_popup()
-        self.temp_widget = tempWidget(self, QListWidget())
+        self._close_category_popup(invalidate_request=False)
+        if self._category_picker is None:
+            self._category_picker = tempWidget(self, QListWidget())
+        self.temp_widget = self._category_picker
+        self.temp_widget.init()
         self.temp_widget.set_rect_cls(self.cls, index)
         self.temp_widget.show_at(global_position)
         return True
 
-    def _close_category_popup(self):
+    def _close_category_popup(self, invalidate_request=True):
         """Close and detach the shared class picker, if it is visible."""
+        if invalidate_request:
+            self._category_picker_request_id = (
+                getattr(self, '_category_picker_request_id', 0) + 1)
         popup = getattr(self, 'temp_widget', None)
         if popup is None:
             return False
         self.temp_widget = None
-        popup.close()
+        popup.dismiss()
         return True
 
     def _begin_task_edit(self, hit, position):
         kind, index, control = hit
         self._select_task_annotation(index)
+        self.img.only_index = True
         original = list(self.img.label_save[index])
         if self.annotation_task == 'obb':
             original = self.img.canonicalize_obb_label(original)
@@ -2025,7 +2300,7 @@ class MainWin(QMainWindow):
         if self.annotation_task == 'obb':
             label = [self.cls, x1, y1, x2, y1, x2, y2, x1, y2]
             index = self.img.append_annotation(label)
-            self.img.save()
+            self._save_annotations('OBB CREATE')
             self._select_task_annotation(index)
         else:
             self.task_pose_bbox = [x1, y1, x2, y2]
@@ -2284,9 +2559,7 @@ class MainWin(QMainWindow):
                 '|  Shift+左键=遮挡，Alt+左键=缺失，右键/Esc=取消')
 
     def _redraw_task_drag(self):
-        frame = self.img.overlay_frame()
-        self.img.label_show(
-            self.is_choose_rect_index, pixmap=frame, commit=False)
+        frame = self._interaction_frame()
         start = self.img.new_xy_to_org_xy(self.task_drag['start'])
         end = self.img.new_xy_to_org_xy(self.task_drag['current'])
         x1, x2 = sorted((start[0], end[0]))
@@ -2303,18 +2576,49 @@ class MainWin(QMainWindow):
     def _queue_interaction_redraw(self, kind, **payload):
         """Coalesce high-frequency pointer updates into the newest frame."""
         self._pending_interaction_redraw = (kind, payload)
-        if not self._interaction_redraw_timer.isActive():
-            self._interaction_redraw_timer.start()
+        if self._interaction_redraw_timer.isActive():
+            return
+        now = time.perf_counter()
+        last = self._last_interaction_redraw_at
+        elapsed_ms = ((now - last) * 1000.0) if last else float('inf')
+        remaining_ms = self._interaction_frame_interval_ms - elapsed_ms
+        if remaining_ms <= 0:
+            # The first pointer frame and frames following a natural pause are
+            # rendered immediately, matching the responsiveness of the
+            # original editor while still coalescing high-rate mouse input.
+            self._flush_interaction_redraw()
+        else:
+            self._interaction_redraw_timer.start(
+                max(1, int(math.ceil(remaining_ms))))
 
     def _cancel_interaction_redraw(self):
         self._interaction_redraw_timer.stop()
         self._pending_interaction_redraw = None
+        self._last_interaction_redraw_at = 0.0
+        self._interaction_base_frame = None
+        self._interaction_base_key = None
+
+    def _interaction_frame(self, excluded_index=None):
+        """Return a frame backed by one cached static annotation layer."""
+        key = (
+            id(self.img), self.annotation_task, excluded_index,
+            len(self.img.label_save), self.img.center,
+            float(self.img.wheel_scale), self.label.size())
+        if self._interaction_base_frame is None or key != self._interaction_base_key:
+            base = self.img.overlay_frame()
+            self.img.label_show(
+                None, pixmap=base, commit=False,
+                excluded_index=excluded_index)
+            self._interaction_base_frame = base
+            self._interaction_base_key = key
+        return QtGui.QPixmap(self._interaction_base_frame)
 
     def _flush_interaction_redraw(self):
         pending = self._pending_interaction_redraw
         self._pending_interaction_redraw = None
         if pending is None or not self.img_is_load:
             return
+        self._last_interaction_redraw_at = time.perf_counter()
         kind, payload = pending
         try:
             self._render_interaction_redraw(kind, payload)
@@ -2339,15 +2643,12 @@ class MainWin(QMainWindow):
             index = self.is_choose_rect_index
             if index is None:
                 return
-            frame = self.img.overlay_frame()
+            frame = self._interaction_frame(excluded_index=index)
             if kind == 'detect_add':
                 # The in-progress box already exists in label_save so it can
                 # be committed without rebuilding data on mouse release. Hide
                 # that temporary solid annotation in this frame and draw the
                 # same geometry as a dashed draft instead.
-                self.img.label_show(
-                    None, pixmap=frame, commit=False,
-                    excluded_index=index)
                 self.img.draw_task_draft(
                     bbox=self.img.label_save[index][1:5],
                     pixmap=frame, commit=False)
@@ -2360,7 +2661,7 @@ class MainWin(QMainWindow):
             self._update_task_edit(
                 payload['position'], payload['modifiers'], redraw=False)
             index = payload.get('index', self.is_choose_rect_index)
-            frame = self.img.overlay_frame()
+            frame = self._interaction_frame(excluded_index=index)
             self.img.label_show(index, pixmap=frame, commit=False)
             self.label.setPixmap(frame)
         elif kind == 'task_drag':
@@ -2374,9 +2675,7 @@ class MainWin(QMainWindow):
     def _redraw_task_draft(self, cursor=None, close_polygon=False):
         if not self.img_is_load:
             return
-        frame = self.img.overlay_frame()
-        self.img.label_show(
-            self.is_choose_rect_index, pixmap=frame, commit=False)
+        frame = self._interaction_frame()
         self.img.draw_task_draft(
             points=self.task_draft_points,
             cursor=cursor,
@@ -2481,7 +2780,7 @@ class MainWin(QMainWindow):
 
     def _save_obb_wheel_change(self):
         if self.img_is_load and self.annotation_task == 'obb':
-            self.img.save()
+            self._save_annotations('OBB ROTATION')
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:
@@ -2683,6 +2982,128 @@ class MainWin(QMainWindow):
         self.arrows_button.setChecked(self.arrows)
         self.hand_button.setChecked(self.hand)
 
+    def _set_io_controls_enabled(self, enabled):
+        for control in (
+                self.open_file, self.open_folder,
+                self.readFolderLabel, self.save_label,
+                self.task_button):
+            control.setEnabled(bool(enabled))
+        self._sync_object_delete_button()
+
+    def _begin_io_operation(self, worker, operation, message):
+        if self._io_operation is not None:
+            self.statusBar().showMessage(
+                'FILE OPERATION BUSY  |  请等待当前任务完成', 4000)
+            return False
+        self._io_operation = operation
+        self._io_worker = worker
+        self._set_io_controls_enabled(False)
+        self.io_progress.setRange(0, 0)
+        self.io_progress.setFormat('处理中')
+        self.io_progress.show()
+        self.statusBar().showMessage(message)
+        worker.progress.connect(self._update_io_progress)
+        worker.failed.connect(self._io_operation_failed)
+        worker.finished.connect(
+            lambda current=worker: self._io_thread_finished(current))
+        worker.start()
+        return True
+
+    def _update_io_progress(self, current, total, detail=''):
+        if not hasattr(self, 'io_progress'):
+            return
+        if total > 0:
+            self.io_progress.setRange(0, total)
+            self.io_progress.setValue(min(max(int(current), 0), total))
+            self.io_progress.setFormat('%v / %m')
+        else:
+            self.io_progress.setRange(0, 0)
+            self.io_progress.setFormat('扫描中')
+        if detail:
+            self.statusBar().showMessage(str(detail))
+
+    def _finish_io_operation(self, message):
+        self._io_operation = None
+        self._set_io_controls_enabled(True)
+        if hasattr(self, 'io_progress'):
+            if self.io_progress.maximum() > 0:
+                self.io_progress.setValue(self.io_progress.maximum())
+            self.io_progress.setFormat('完成')
+        self.statusBar().showMessage(message, 9000)
+        QTimer.singleShot(1200, self._hide_idle_io_progress)
+
+    def _hide_idle_io_progress(self):
+        if self._io_operation is None and hasattr(self, 'io_progress'):
+            self.io_progress.hide()
+
+    def _io_thread_finished(self, worker):
+        LOGGER.info(
+            'I/O thread finished | operation=%s worker=%s',
+            self._io_operation, type(worker).__name__)
+        if self._io_worker is worker:
+            self._io_worker = None
+        worker.deleteLater()
+        if (self._io_operation == 'images'
+                and self._pending_image_payload is not None):
+            payload = self._pending_image_payload
+            mode = self._pending_image_mode
+            self._pending_image_payload = None
+            self._pending_image_mode = None
+            QTimer.singleShot(
+                0, lambda: self._image_scan_completed(payload, mode))
+
+    def _io_operation_failed(self, message):
+        LOGGER.error('File operation failed: %s', message)
+        self._finish_io_operation(f'ERROR  |  {message}')
+        QMessageBox.warning(self, '文件操作失败', message)
+
+    def _start_image_import(self, paths=None, folder=None, mode='files'):
+        if self._io_operation is not None:
+            self.statusBar().showMessage(
+                'FILE OPERATION BUSY  |  请等待当前任务完成', 4000)
+            return False
+        worker = ImageScanWorker(paths=paths, folder=folder, parent=self)
+        self._pending_image_mode = mode
+        worker.completed.connect(self._image_scan_result_ready)
+        return self._begin_io_operation(
+            worker, 'images', 'IMAGE IMPORT  |  正在扫描图片')
+
+    def _image_scan_result_ready(self, payload):
+        # Do not launch the thumbnail QThread while the scan QThread is still
+        # unwinding; on Windows that overlap can race QObject destruction.
+        self._pending_image_payload = payload
+        LOGGER.info(
+            'Image scan result queued | images=%s',
+            len(payload.get('paths', ())))
+
+    def _image_scan_completed(self, payload, mode):
+        paths = payload.get('paths', [])
+        LOGGER.info(
+            'Building image queue | images=%s mode=%s', len(paths), mode)
+        if not paths:
+            self._finish_io_operation('IMAGE IMPORT  |  没有找到可用图片')
+            return
+        self.img_list = set(paths)
+        self.img_list_only_name = {Path(path).stem for path in paths}
+        self.reset_thumbnail(paths)
+        LOGGER.info('Image queue build scheduled | images=%s', len(paths))
+        self.is_open_file = mode == 'files'
+        self.is_open_folder = mode == 'folder'
+
+    def _thumbnail_loading_progress(self, current, total, path):
+        self._update_io_progress(
+            current, total, f'IMAGE PREVIEW  |  {Path(path).name}')
+
+    def _thumbnail_loading_finished(self, total, errors):
+        LOGGER.info(
+            'Thumbnail loading finished | total=%s errors=%s operation=%s',
+            total, errors, self._io_operation)
+        if self._io_operation != 'images':
+            return
+        suffix = f'  |  {errors} FAILED' if errors else ''
+        self._finish_io_operation(
+            f'IMAGE IMPORT COMPLETE  |  {total - errors} IMAGES{suffix}')
+
     def select_folder(self):
         # 选择获取文件夹路径
         options = QFileDialog.Options()
@@ -2690,92 +3111,108 @@ class MainWin(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder", "/home", options=options)
 
         if os.path.isdir(folder) and os.path.exists(folder):
-            img_path = [os.path.join(folder, i) for i in os.listdir(folder)]
-            img_path = [i for i in img_path if i.lower().endswith(('.jpg', '.png', '.jpeg', '.bmp', '.tiff'))]
-            self.reset_thumbnail(img_path)
-
-            self.img_list = set(img_path)
-            self.img_list_only_name = set([os.path.basename(i).split('.')[0] for i in img_path])
-            if len(self.img_list):
-                self.is_open_file = False
-                self.is_open_folder = True
+            self._start_image_import(folder=folder, mode='folder')
 
     def select_file(self):
         # 选择获取文件路径
-        file_path, _ = QFileDialog.getOpenFileNames(None, "选择文件", "", "All Files (*);;Text Files (*.txt)")
-        p = []
-        for file_path in file_path:
-            if os.path.isfile(file_path) and file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-                self.is_open_file = True
-                self.is_open_folder = False
-                p += [file_path]
-        self.img_list = set(p)
-        self.img_list_only_name = set([os.path.basename(i).split('.')[0] for i in p])
-        if len(p):
-            self.reset_thumbnail(p)
-            self.is_open_file = True
-            self.is_open_folder = False
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            None, '选择图片', '',
+            'Images (*.png *.jpg *.jpeg *.bmp *.tiff *.gif);;All Files (*)')
+        if file_paths:
+            self._start_image_import(paths=file_paths, mode='files')
 
     def readFolderLabel_(self):
-        txt_path_ = []
-        folder = ''
+        sources = []
+        folder = None
         if self.is_open_folder:
             options = QFileDialog.Options()
             options |= QFileDialog.ShowDirsOnly
             folder = QFileDialog.getExistingDirectory(self, "Select Folder", "/home", options=options)
 
-            if os.path.isdir(folder) and os.path.exists(folder):
-                txt_path = [os.path.join(folder, i) for i in os.listdir(folder)]
-                txt_path = [i for i in txt_path if i.lower().endswith('.txt')]
-                txt_path_ = {Path(i).stem for i in txt_path}
-            else:
+            if not (os.path.isdir(folder) and os.path.exists(folder)):
                 return
 
         elif self.is_open_file:
-            file_path, _ = QFileDialog.getOpenFileNames(None, "选择文件", "", "All Files (*);;Text Files (*.txt)")
-            txt_path = []
-            txt_path_ = []
-            folder = os.path.dirname(file_path[0]) if len(file_path) else None
-            for file_path in file_path:
-                if os.path.isfile(file_path) and file_path.endswith('.txt'):
-                    txt_path += [file_path]
-                    txt_path_ += [Path(file_path).stem]
-            if not len(txt_path):
+            sources, _ = QFileDialog.getOpenFileNames(
+                None, '选择标签', '', 'Text Files (*.txt);;All Files (*)')
+            if not sources:
                 return
+        else:
+            self.statusBar().showMessage('LABEL IMPORT  |  请先导入图片', 5000)
+            return
+        worker = LabelImportWorker(
+            self.default_save_path, self.img_list_only_name,
+            self.annotation_task, self.kpt_shape,
+            sources=sources, folder=folder, parent=self)
+        worker.completed.connect(self._label_import_completed)
+        self._begin_io_operation(
+            worker, 'labels', 'LABEL IMPORT  |  正在解析标签')
 
-        imported = 0
-        for i in txt_path_:
-            if i not in self.img_list_only_name:
-                continue
-            source = Path(folder) / f'{i}.txt'
-            destination = self.default_save_path / f'{i}.txt'
-            try:
-                self._merge_label_file(source, destination)
-            except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, '标签导入失败', str(exc))
-                continue
-            self.label_list.add(str(destination))
-            self.label_list_only_name.add(i)
-            imported += 1
-        if imported:
-            self.ui.thumbnailWidget.clear()
-            self.thumbnail_widget.init()
-            self.thumbnail_widget.screen_list_widget.setCurrentRow(self.thumbnail_widget.index)
-            self.thumbnail_widget.update_header()
-            self.init(img_path=self.thumbnail_widget.show_list[self.thumbnail_widget.index])
-            self.statusBar().showMessage(f'LABEL IMPORT COMPLETE  |  {imported} FILES')
+    def _label_import_completed(self, payload):
+        imported = payload.get('imported', [])
+        errors = payload.get('errors', [])
+        for destination in imported:
+            self.label_list.add(destination)
+            self.label_list_only_name.add(Path(destination).stem)
+        if imported and self.thumbnail_widget is not None:
+            index = self.thumbnail_widget.index
+            if 0 <= index < len(self.thumbnail_widget.show_list):
+                self.init(self.thumbnail_widget.show_list[index])
+                self.thumbnail_widget.screen_list_widget.setCurrentRow(index)
+                self.thumbnail_widget.update_header()
+        converted = payload.get('converted_rows', 0)
+        message = f'LABEL IMPORT COMPLETE  |  {len(imported)} FILES'
+        if converted:
+            message += f'  |  {converted} POSE ROWS CONVERTED'
+        if errors:
+            message += f'  |  {len(errors)} FAILED'
+        self._finish_io_operation(message)
+        if errors:
+            preview = '\n'.join(errors[:6])
+            if len(errors) > 6:
+                preview += f'\n…另有 {len(errors) - 6} 个错误'
+            QMessageBox.warning(self, '部分标签导入失败', preview)
 
     def _merge_label_file(self, source, destination):
-        incoming = DataApp(
-            source, task=self.annotation_task, kpt_shape=self.kpt_shape)
-        if not destination.exists():
-            shutil.copy2(source, destination)
+        added, _converted = merge_label_file(
+            source, destination, self.annotation_task, self.kpt_shape)
+        return added
+
+    def update_image_position_status(self, index, total, filename):
+        """Refresh the editable one-based image position indicator."""
+        total = max(0, int(total))
+        position = min(max(int(index) + 1, 1), total) if total else 0
+        self.image_index_input.setText(str(position) if position else '')
+        self.image_index_input.setFixedWidth(
+            max(48, min(78, max(len(str(total)), 3) * 8 + 22)))
+        self.image_total_label.setText(f'/ {total}')
+        self.current_label_name_show.setText(
+            f'·   {filename}' if filename else '')
+
+    def _jump_to_image_index(self):
+        thumbnail = self.thumbnail_widget
+        if thumbnail is None or not thumbnail.show_list:
+            self.image_index_input.clear()
             return
-        existing = DataApp(
-            destination, task=self.annotation_task,
-            kpt_shape=self.kpt_shape)
-        existing.merge(incoming)
-        existing.save()
+        current = int(thumbnail.index)
+        try:
+            target = int(self.image_index_input.text().strip()) - 1
+        except ValueError:
+            target = -1
+        if not 0 <= target < len(thumbnail.show_list):
+            self.image_index_input.setText(str(current + 1))
+            self.image_index_input.selectAll()
+            self.statusBar().showMessage(
+                f'IMAGE JUMP  |  请输入 1 - {len(thumbnail.show_list)}', 3000)
+            return
+        thumbnail.up_dowm(target)
+        item = thumbnail.screen_list_widget.item(target)
+        thumbnail.screen_list_widget.setCurrentRow(target)
+        if item is not None:
+            thumbnail.screen_list_widget.scrollToItem(
+                item, QAbstractItemView.PositionAtCenter)
+        self.image_index_input.setText(str(target + 1))
+        self.image_index_input.selectAll()
 
     def imgUp_(self):
         if self.img_is_load:
@@ -2798,7 +3235,28 @@ class MainWin(QMainWindow):
             self.img.show()
             self.img.label_show()
 
+    def _sync_object_delete_button(self):
+        button = getattr(self, 'object_delete_button', None)
+        if button is None:
+            return
+        image = getattr(self, 'img', None)
+        index = getattr(self, 'is_choose_rect_index', None)
+        enabled = (
+            getattr(self, 'img_is_load', False)
+            and image is not None
+            and getattr(self, 'is_choose_rect', False)
+            and isinstance(index, int) and not isinstance(index, bool)
+            and 0 <= index < len(image.label_save)
+            and getattr(self, '_io_operation', None) != 'labels'
+        )
+        button.setEnabled(enabled)
+
     def deleteBox_(self, index=False):
+        if self._io_operation == 'labels':
+            self.statusBar().showMessage(
+                'LABEL IMPORT  |  标签正在合并，暂不能删除标注', 3000)
+            self._sync_object_delete_button()
+            return
         if self.is_choose_rect and self.is_choose_rect_index is not None:
             self.img.pop(index if index else self.is_choose_rect_index)
             self.is_choose_rect_index = None
@@ -2814,7 +3272,8 @@ class MainWin(QMainWindow):
             self.len_rect -= 1
 
             self.move_xy()
-            self.img.save()
+            self._save_annotations('DELETE')
+        self._sync_object_delete_button()
 
     # ———————————————————————————————— 快捷键 ————————————————————————————————#
     def handleShortcut1_(self):
@@ -3027,6 +3486,21 @@ class MainWin(QMainWindow):
         self.statusBar().showMessage(
             f'INFERENCE COMPLETE  |  {Path(target.img_path).name}  |  {len(annotations)} OBJECTS ADDED')
 
+    def _save_annotations(self, context='SAVE'):
+        """Save without allowing a filesystem error to poison Qt state."""
+        if not self.img_is_load or self.img is None:
+            return False
+        try:
+            self.img.save()
+            return True
+        except OSError as exc:
+            LOGGER.exception(
+                'Annotation save failed | context=%s image=%s',
+                context, getattr(self.img, 'img_path', None))
+            self.statusBar().showMessage(
+                f'{context} FAILED  |  标签文件暂时无法写入：{exc}', 9000)
+            return False
+
     def save_(self):
         # 选择获取文件夹路径
         if self.is_open_file or self.is_open_folder:
@@ -3034,13 +3508,24 @@ class MainWin(QMainWindow):
             options |= QFileDialog.ShowDirsOnly
             folder = QFileDialog.getExistingDirectory(self, "Select Folder", "/home", options=options)
             if os.path.isdir(folder) and os.path.exists(folder):
-                exported = 0
-                for i in self.img_list_only_name:
-                    p = os.path.join(self.default_save_path, i + '.txt')
-                    if os.path.exists(p) and os.path.getsize(p) > 0:
-                        shutil.copy(p, folder)
-                        exported += 1
-                self.statusBar().showMessage(f'EXPORT COMPLETE  |  {exported} LABEL FILES  |  {folder}')
+                worker = LabelExportWorker(
+                    self.default_save_path, self.img_list_only_name,
+                    folder, parent=self)
+                worker.completed.connect(self._label_export_completed)
+                self._begin_io_operation(
+                    worker, 'export', 'LABEL EXPORT  |  正在导出标签')
+
+    def _label_export_completed(self, payload):
+        errors = payload.get('errors', [])
+        message = (
+            f'EXPORT COMPLETE  |  {payload.get("exported", 0)} LABEL FILES'
+            f'  |  {payload.get("folder", "")}')
+        if errors:
+            message += f'  |  {len(errors)} FAILED'
+        self._finish_io_operation(message)
+        if errors:
+            QMessageBox.warning(
+                self, '部分标签导出失败', '\n'.join(errors[:6]))
 
     # 鼠标放到框上显示框的颜色加深， 不悬浮的时候颜色恢复
     def mouse_hover_display(self):
@@ -3119,7 +3604,8 @@ class MainWin(QMainWindow):
         self.thumbnail_widget = thumbnailApp(self.ui.thumbnailWidget, self.current_label_name_show, self, img_list,
                                              self.label_list,
                                              size=(self.thumbnail_preview_size,
-                                                   self.thumbnail_preview_size))
+                                                   self.thumbnail_preview_size),
+                                             paths_validated=True)
         self.thumbnail_widget.screen_list_widget.setDragDropMode(QListWidget.NoDragDrop)
 
         self.is_open_file = False

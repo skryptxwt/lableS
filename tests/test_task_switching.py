@@ -1,9 +1,11 @@
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from PyQt5.QtCore import QEvent, QPoint, Qt
-from PyQt5.QtWidgets import QComboBox, QSpinBox
+from PyQt5.QtWidgets import (QApplication, QComboBox, QListWidget, QSpinBox,
+                             QWidget)
 
 from utils import mainWindow as main_window_module
 from utils.mainWindow import MainWin
@@ -11,48 +13,175 @@ from utils.tempCatewidget import CategoryApp as CategoryPopup
 
 
 class TaskSwitchingTest(unittest.TestCase):
+    def test_object_header_delete_is_enabled_only_for_valid_selection(self):
+        states = []
+        button = SimpleNamespace(
+            setEnabled=lambda enabled: states.append(bool(enabled)))
+        window = SimpleNamespace(
+            object_delete_button=button,
+            img_is_load=True,
+            img=SimpleNamespace(label_save=[[0, 1, 2, 3, 4]]),
+            is_choose_rect=True,
+            is_choose_rect_index=0,
+            _io_operation=None,
+        )
+
+        MainWin._sync_object_delete_button(window)
+        window.is_choose_rect_index = None
+        MainWin._sync_object_delete_button(window)
+        window.is_choose_rect_index = 0
+        window._io_operation = 'labels'
+        MainWin._sync_object_delete_button(window)
+
+        self.assertEqual(states, [True, False, False])
+
+    def test_category_picker_is_an_in_window_overlay(self):
+        app = QApplication.instance() or QApplication([])
+        host = QWidget()
+        host.resize(800, 600)
+        main = SimpleNamespace(
+            window_shell=host,
+            names={0: '0', 1: '1'},
+            class_styles={},
+            colors={},
+            cls=0,
+            change_label_name=False,
+            temp_widget=None,
+        )
+
+        popup = CategoryPopup(main, QListWidget())
+
+        self.assertIs(popup.parentWidget(), host)
+        self.assertFalse(popup.isWindow())
+        self.assertFalse(bool(popup.windowFlags() & Qt.Popup))
+        popup.close()
+        app.processEvents()
+
+    def test_image_index_input_jumps_to_one_based_position(self):
+        selected_rows = []
+        scrolled_items = []
+
+        class IndexInput:
+            value = '4'
+
+            def text(self):
+                return self.value
+
+            def setText(self, value):
+                self.value = value
+
+            def selectAll(self):
+                pass
+
+        queue = SimpleNamespace(
+            item=lambda index: f'item-{index}',
+            setCurrentRow=lambda index: selected_rows.append(index),
+            scrollToItem=lambda item, _hint: scrolled_items.append(item),
+        )
+        thumbnail = SimpleNamespace(
+            index=0,
+            show_list=['1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg'],
+            screen_list_widget=queue,
+        )
+
+        def jump(index):
+            thumbnail.index = index
+
+        thumbnail.up_dowm = jump
+        window = SimpleNamespace(
+            thumbnail_widget=thumbnail,
+            image_index_input=IndexInput(),
+            statusBar=lambda: SimpleNamespace(showMessage=lambda *args: None),
+        )
+
+        MainWin._jump_to_image_index(window)
+
+        self.assertEqual(thumbnail.index, 3)
+        self.assertEqual(selected_rows, [3])
+        self.assertEqual(scrolled_items, ['item-3'])
+
+    def test_image_index_input_rejects_out_of_range_position(self):
+        messages = []
+
+        class IndexInput:
+            value = '99'
+
+            def text(self):
+                return self.value
+
+            def setText(self, value):
+                self.value = value
+
+            def selectAll(self):
+                pass
+
+        thumbnail = SimpleNamespace(index=1, show_list=['1.jpg', '2.jpg'])
+        field = IndexInput()
+        window = SimpleNamespace(
+            thumbnail_widget=thumbnail,
+            image_index_input=field,
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout: messages.append(message)),
+        )
+
+        MainWin._jump_to_image_index(window)
+
+        self.assertEqual(field.value, '2')
+        self.assertIn('1 - 2', messages[0])
+
     def test_failed_label_import_keeps_image_queue(self):
         queue_clears = []
         warnings = []
-
-        def reject_label(_source, _destination):
-            raise ValueError('标签格式与当前任务不兼容')
-
         window = SimpleNamespace(
-            is_open_folder=False,
-            is_open_file=True,
-            img_list_only_name={'sample'},
-            default_save_path=main_window_module.Path('labels'),
             label_list=set(),
             label_list_only_name=set(),
-            annotation_task='segment',
-            kpt_shape=(17, 3),
+            thumbnail_widget=None,
             ui=SimpleNamespace(
                 thumbnailWidget=SimpleNamespace(
                     clear=lambda: queue_clears.append(True))),
-            _merge_label_file=reject_label,
+            _finish_io_operation=lambda message: None,
         )
 
         with patch.object(
-                main_window_module.QFileDialog, 'getOpenFileNames',
-                return_value=(['C:/labels/sample.txt'], '')), \
-             patch.object(
-                 main_window_module.os.path, 'isfile', return_value=True), \
-             patch.object(
-                 main_window_module.QMessageBox, 'warning',
-                 side_effect=lambda _parent, title, message:
-                 warnings.append((title, message))):
-            MainWin.readFolderLabel_(window)
+                main_window_module.QMessageBox, 'warning',
+                side_effect=lambda _parent, title, message:
+                warnings.append((title, message))):
+            MainWin._label_import_completed(window, {
+                'imported': [],
+                'errors': ['sample.txt: 标签格式与当前任务不兼容'],
+                'converted_rows': 0,
+            })
 
         self.assertEqual(queue_clears, [])
         self.assertEqual(window.label_list, set())
         self.assertEqual(window.label_list_only_name, set())
         self.assertEqual(warnings, [
-            ('标签导入失败', '标签格式与当前任务不兼容')])
+            ('部分标签导入失败',
+             'sample.txt: 标签格式与当前任务不兼容')])
+
+    def test_pose_prediction_import_writes_converted_training_label(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = main_window_module.Path(directory)
+            source = folder / 'prediction.txt'
+            destination = folder / 'imported.txt'
+            source.write_text(
+                '0 0.5 0.5 0.4 0.6 0.4 0.4 0.9 0.6 0.4 0.3\n',
+                encoding='utf-8')
+            window = SimpleNamespace(
+                annotation_task='pose', kpt_shape=(2, 3))
+
+            added = MainWin._merge_label_file(
+                window, source, destination)
+            imported = main_window_module.DataApp(
+                destination, task='pose', kpt_shape=(2, 3))
+
+            self.assertEqual(added, 1)
+            self.assertEqual(imported[0][-6:], [
+                0.4, 0.4, 2.0, 0.6, 0.4, 1.0])
 
     def test_category_popup_close_detaches_shared_reference(self):
         closed = []
-        popup = SimpleNamespace(close=lambda: closed.append(True))
+        popup = SimpleNamespace(dismiss=lambda: closed.append(True))
         window = SimpleNamespace(temp_widget=popup)
 
         result = MainWin._close_category_popup(window)
@@ -60,6 +189,43 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertTrue(result)
         self.assertIsNone(window.temp_widget)
         self.assertEqual(closed, [True])
+
+    def test_category_picker_reuses_existing_overlay(self):
+        calls = []
+        picker = SimpleNamespace(
+            init=lambda: calls.append('init'),
+            set_rect_cls=lambda cls, index: calls.append(
+                ('select', cls, index)),
+            show_at=lambda position: calls.append(('show', position)),
+        )
+        image = SimpleNamespace(label_save=[[2, 1, 2, 3, 4]])
+        window = SimpleNamespace(
+            img_is_load=True,
+            img=image,
+            annotation_task='detect',
+            is_choose_rect=False,
+            is_choose_rect_index=None,
+            is_hover_move_allow=False,
+            rect_save_current=None,
+            cls=0,
+            _category_picker=picker,
+            temp_widget=None,
+            move_xy=lambda index=None: calls.append(('move', index)),
+            boxShowWidget=SimpleNamespace(
+                set_rect_box=lambda index: calls.append(('box', index))),
+            categoryShowWidget=SimpleNamespace(
+                set_rect_cls=lambda cls, index: calls.append(
+                    ('class', cls, index))),
+            _close_category_popup=lambda invalidate_request=False: False,
+        )
+
+        shown = MainWin._show_annotation_category_picker(
+            window, 0, QPoint(50, 60))
+
+        self.assertTrue(shown)
+        self.assertIs(window.temp_widget, picker)
+        self.assertIn(('select', 2, 0), calls)
+        self.assertIn(('show', QPoint(50, 60)), calls)
 
     def test_category_popup_closes_when_annotation_is_no_longer_valid(self):
         messages = []
@@ -72,7 +238,7 @@ class TaskSwitchingTest(unittest.TestCase):
         )
         popup = SimpleNamespace(
             main_window=main,
-            close=lambda: closed.append(True),
+            dismiss=lambda deferred=False: closed.append(deferred),
         )
 
         CategoryPopup.changeLabel(popup, SimpleNamespace())
@@ -585,7 +751,7 @@ class TaskSwitchingTest(unittest.TestCase):
                 img=image,
                 mouse_pos=None,
                 _event_canvas_pos=lambda source, current_event: (30, 40),
-                _show_annotation_category_picker=(
+                _request_annotation_category_picker=(
                     lambda index, position, current=task:
                     opened.append((current, index, position))),
             )
@@ -598,7 +764,7 @@ class TaskSwitchingTest(unittest.TestCase):
             label=label,
             img=image,
             _event_canvas_pos=lambda source, current_event: (30, 40),
-            _show_annotation_category_picker=(
+            _request_annotation_category_picker=(
                 lambda index, position: opened.append(
                     ('detect', index, position))),
         )
@@ -606,6 +772,84 @@ class TaskSwitchingTest(unittest.TestCase):
 
         self.assertEqual([entry[:2] for entry in opened], [
             ('segment', 2), ('obb', 2), ('pose', 2), ('detect', 2)])
+
+    def test_category_picker_is_deferred_until_double_click_returns(self):
+        callbacks = []
+        opened = []
+        image = SimpleNamespace(label_save=[[0, 1, 2, 3, 4]],
+                                only_index=True)
+        window = SimpleNamespace(
+            _category_picker_request_id=0,
+            _ignored_release_request_id=None,
+            img=image,
+            annotation_task='detect',
+            mouse_left_press=True,
+            is_add_box=False,
+            is_update_label=True,
+            task_edit=None,
+            task_drag=None,
+            detect_drag_original=[0, 1, 2, 3, 4],
+            detect_drag_start_org=(1, 2),
+            _cancel_interaction_redraw=lambda: None,
+            _open_requested_category_picker=(
+                lambda request, current_image, index, position:
+                opened.append((request, current_image, index, position))),
+            _expire_category_release_guard=lambda request: None,
+        )
+
+        with patch.object(
+                main_window_module.QTimer, 'singleShot',
+                side_effect=lambda _delay, callback: callbacks.append(callback)):
+            handled = MainWin._request_annotation_category_picker(
+                window, 0, QPoint(30, 40))
+
+        self.assertTrue(handled)
+        self.assertEqual(opened, [])
+        self.assertTrue(window._ignore_left_release)
+        self.assertFalse(window.mouse_left_press)
+        self.assertFalse(window.is_update_label)
+        self.assertFalse(image.only_index)
+        self.assertEqual(len(callbacks), 2)
+
+        callbacks[0]()
+
+        self.assertEqual(opened[0][0:3], (1, image, 0))
+
+    def test_detect_double_click_recovers_from_malformed_annotation(self):
+        messages = []
+
+        class DoubleClickEvent:
+            @staticmethod
+            def pos():
+                return QPoint(30, 40)
+
+        label = SimpleNamespace(
+            mapToGlobal=lambda point: QPoint(point.x() + 100,
+                                             point.y() + 200))
+        window = SimpleNamespace(
+            img=SimpleNamespace(
+                label_save=[[0, 1, 2, 3, 4, 5]],
+                hit_test=lambda x, y: ('rect', 0, -1)),
+            is_choose_rect_index=None,
+            temp_widget=None,
+            mouse_left_press=True,
+            is_add_box=True,
+            is_update_label=True,
+            _event_canvas_pos=lambda source, event: (30, 40),
+            _show_annotation_category_picker=lambda index, position: None,
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0:
+                messages.append(message)),
+        )
+
+        handled = MainWin._handle_detect_double_click(
+            window, label, DoubleClickEvent())
+
+        self.assertTrue(handled)
+        self.assertFalse(window.mouse_left_press)
+        self.assertFalse(window.is_add_box)
+        self.assertFalse(window.is_update_label)
+        self.assertIn('DOUBLE CLICK RECOVERED', messages[-1])
 
     def test_interaction_redraw_coalesces_to_latest_pointer_frame(self):
         class FakeTimer:
@@ -616,7 +860,7 @@ class TaskSwitchingTest(unittest.TestCase):
             def isActive(self):
                 return self.active
 
-            def start(self):
+            def start(self, _delay=None):
                 self.active = True
                 self.starts += 1
 
@@ -624,16 +868,45 @@ class TaskSwitchingTest(unittest.TestCase):
         window = SimpleNamespace(
             _pending_interaction_redraw=None,
             _interaction_redraw_timer=timer,
+            _last_interaction_redraw_at=100.0,
+            _interaction_frame_interval_ms=8.0,
+            _flush_interaction_redraw=lambda: None,
         )
 
-        MainWin._queue_interaction_redraw(
-            window, 'task_drag', cursor=(10, 20))
-        MainWin._queue_interaction_redraw(
-            window, 'task_drag', cursor=(80, 90))
+        with patch.object(
+                main_window_module.time, 'perf_counter', return_value=100.001):
+            MainWin._queue_interaction_redraw(
+                window, 'task_drag', cursor=(10, 20))
+            MainWin._queue_interaction_redraw(
+                window, 'task_drag', cursor=(80, 90))
 
         self.assertEqual(timer.starts, 1)
         self.assertEqual(window._pending_interaction_redraw, (
             'task_drag', {'cursor': (80, 90)}))
+
+    def test_first_interaction_frame_is_rendered_without_timer_delay(self):
+        rendered = []
+
+        class FakeTimer:
+            @staticmethod
+            def isActive():
+                return False
+
+            @staticmethod
+            def start(_delay=None):
+                raise AssertionError('首帧不应等待定时器')
+
+        window = SimpleNamespace(
+            _pending_interaction_redraw=None,
+            _interaction_redraw_timer=FakeTimer(),
+            _last_interaction_redraw_at=0.0,
+            _interaction_frame_interval_ms=8.0,
+            _flush_interaction_redraw=lambda: rendered.append(True),
+        )
+
+        MainWin._queue_interaction_redraw(window, 'detect_add')
+
+        self.assertEqual(rendered, [True])
 
     def test_detect_drag_renders_dashed_draft_instead_of_solid_box(self):
         calls = []
@@ -658,6 +931,9 @@ class TaskSwitchingTest(unittest.TestCase):
             img=FakeImage(),
             is_choose_rect_index=0,
             addBox=lambda redraw=True: calls.append(('add', redraw)),
+            _interaction_frame=(
+                lambda excluded_index=None: (
+                    calls.append(('base', excluded_index)), frame)[1]),
             label=SimpleNamespace(
                 setPixmap=lambda pixmap: calls.append(('commit', pixmap))),
         )
@@ -665,8 +941,7 @@ class TaskSwitchingTest(unittest.TestCase):
         MainWin._render_interaction_redraw(window, 'detect_add', {})
 
         self.assertEqual(calls[0], ('add', False))
-        self.assertEqual(calls[1][0:2], ('labels', None))
-        self.assertEqual(calls[1][2]['excluded_index'], 0)
+        self.assertEqual(calls[1], ('base', 0))
         self.assertEqual(calls[2][0], 'draft')
         self.assertEqual(calls[2][1]['bbox'], [10, 20, 110, 80])
         self.assertIs(calls[-1][1], frame)

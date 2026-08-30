@@ -2,9 +2,9 @@ import unittest
 
 from utils.class_styles import (
     DEFAULT_BORDER, DEFAULT_BORDER_WIDTH, DEFAULT_HANDLE, DEFAULT_HANDLE_SIZE,
-    DEFAULT_TEXT_POSITION, DEFAULT_TEXT_SIZE, build_class_styles,
-    default_class_color, default_class_style, display_border,
-    normalize_class_style, normalize_rgba,
+    DEFAULT_SELECTED_BORDER_EXTRA, DEFAULT_TEXT_POSITION, DEFAULT_TEXT_SIZE,
+    build_class_styles, default_class_color, default_class_style,
+    display_border, normalize_class_style, normalize_rgba,
     serialize_class_styles,
 )
 
@@ -18,6 +18,8 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(style['handle'], DEFAULT_HANDLE)
         self.assertEqual(style['handle_size'], DEFAULT_HANDLE_SIZE)
         self.assertEqual(style['border_width'], DEFAULT_BORDER_WIDTH)
+        self.assertEqual(
+            style['selected_border_extra'], DEFAULT_SELECTED_BORDER_EXTRA)
         self.assertEqual(style['text'], (10, 20, 30, 255))
         self.assertEqual(style['text_size'], DEFAULT_TEXT_SIZE)
         self.assertEqual(style['text_position'], DEFAULT_TEXT_POSITION)
@@ -29,6 +31,7 @@ class ClassStylesTest(unittest.TestCase):
             'handle': [7, 8, 9, 160],
             'handle_size': 14,
             'border_width': 5,
+            'selected_border_extra': 4,
             'text': [10, 11, 12, 130],
             'text_size': 16,
             'text_position': 'inside_bottom_right',
@@ -39,6 +42,7 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(style['handle'], (7, 8, 9, 160))
         self.assertEqual(style['handle_size'], 14)
         self.assertEqual(style['border_width'], 5)
+        self.assertEqual(style['selected_border_extra'], 4)
         self.assertEqual(style['text'], (10, 11, 12, 130))
         self.assertEqual(style['text_size'], 16)
         self.assertEqual(style['text_position'], 'inside_bottom_right')
@@ -58,6 +62,7 @@ class ClassStylesTest(unittest.TestCase):
             3: {
                 'border': (1, 2, 3, 4),
                 'border_width': 6,
+                'selected_border_extra': 7,
                 'fill': (5, 6, 7, 8),
                 'handle': (9, 10, 11, 12),
                 'handle_size': 16,
@@ -72,6 +77,7 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(serialized[3]['handle'], [9, 10, 11, 12])
         self.assertEqual(serialized[3]['handle_size'], 16)
         self.assertEqual(serialized[3]['border_width'], 6)
+        self.assertEqual(serialized[3]['selected_border_extra'], 7)
         self.assertEqual(serialized[3]['text'], [13, 14, 15, 16])
         self.assertEqual(serialized[3]['text_size'], 18)
         self.assertEqual(serialized[3]['text_position'], 'outside_bottom_left')
@@ -79,12 +85,14 @@ class ClassStylesTest(unittest.TestCase):
     def test_invalid_dimensions_and_position_use_safe_values(self):
         style = normalize_class_style({
             'border_width': 99,
+            'selected_border_extra': 99,
             'handle_size': 99,
             'text_size': 'invalid',
             'text_position': 'somewhere',
         })
 
         self.assertEqual(style['border_width'], 12)
+        self.assertEqual(style['selected_border_extra'], 12)
         self.assertEqual(style['handle_size'], 20)
         self.assertEqual(style['text_size'], DEFAULT_TEXT_SIZE)
         self.assertEqual(style['text_position'], DEFAULT_TEXT_POSITION)
@@ -105,6 +113,13 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(selected_color, (10, 20, 30, 255))
         self.assertEqual(selected_width, 5)
 
+    def test_selected_border_uses_configured_extra_width(self):
+        selected_color, selected_width = display_border(
+            (10, 20, 30, 80), 3, selected=True, selected_extra=6)
+
+        self.assertEqual(selected_color, (10, 20, 30, 255))
+        self.assertEqual(selected_width, 9)
+
     def test_each_default_class_has_a_stable_independent_color(self):
         colors = [default_class_color(class_id) for class_id in range(20)]
 
@@ -122,6 +137,8 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(style['handle_size'], DEFAULT_HANDLE_SIZE)
         self.assertEqual(style['text'][:3], color)
         self.assertEqual(style['border_width'], DEFAULT_BORDER_WIDTH)
+        self.assertEqual(
+            style['selected_border_extra'], DEFAULT_SELECTED_BORDER_EXTRA)
         self.assertEqual(style['text_size'], DEFAULT_TEXT_SIZE)
         self.assertEqual(style['text_position'], DEFAULT_TEXT_POSITION)
 

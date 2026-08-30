@@ -2,6 +2,7 @@ import unittest
 import math
 from types import SimpleNamespace
 from PyQt5.QtCore import QPointF, Qt
+from PyQt5.QtGui import QImage
 
 from utils.ImageApp import Image
 from utils.mainWindow import MainWin
@@ -25,6 +26,32 @@ class FakeImage:
 
 
 class ImageLayeringTest(unittest.TestCase):
+    def test_draft_respects_disabled_fill_option(self):
+        canvas = QImage(100, 100, QImage.Format_ARGB32)
+        canvas.fill(Qt.transparent)
+        style = {
+            'border': (20, 180, 220, 255),
+            'fill': (40, 190, 90, 180),
+            'handle': (240, 60, 70, 255),
+            'handle_size': 6,
+        }
+        image = SimpleNamespace(
+            screen_label=SimpleNamespace(pixmap=lambda: canvas),
+            parent=SimpleNamespace(cls=0),
+            task='detect',
+            show_box_fill=False,
+            _class_style=lambda _cls: style,
+            _enable_quality_rendering=Image._enable_quality_rendering,
+            _annotation_pen=Image._annotation_pen,
+            org_xy_to_new_xy=lambda point: point,
+        )
+
+        Image.draw_task_draft(
+            image, bbox=[10, 10, 80, 80], pixmap=canvas, commit=False)
+
+        self.assertEqual(canvas.pixelColor(45, 45).alpha(), 0)
+        self.assertGreater(canvas.pixelColor(10, 10).alpha(), 0)
+
     def assertObbIsRectangle(self, label, places=6):
         points = list(zip(label[1::2], label[2::2]))
         edges = [

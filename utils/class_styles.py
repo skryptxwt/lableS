@@ -7,6 +7,7 @@ DEFAULT_FILL = (36, 155, 200, 50)
 DEFAULT_HANDLE = (238, 68, 75, 230)
 DEFAULT_HANDLE_SIZE = 8
 DEFAULT_BORDER_WIDTH = 2
+DEFAULT_SELECTED_BORDER_EXTRA = 2
 DEFAULT_TEXT = (36, 155, 200, 255)
 DEFAULT_TEXT_SIZE = 10
 DEFAULT_TEXT_POSITION = 'outside_top_left'
@@ -38,6 +39,7 @@ def default_class_style(class_id):
     return {
         'border': (red, green, blue, DEFAULT_BORDER[3]),
         'border_width': DEFAULT_BORDER_WIDTH,
+        'selected_border_extra': DEFAULT_SELECTED_BORDER_EXTRA,
         'fill': (red, green, blue, DEFAULT_FILL[3]),
         'handle': (red, green, blue, 255),
         'handle_size': DEFAULT_HANDLE_SIZE,
@@ -89,13 +91,16 @@ def normalize_text_position(value):
     return value if value in TEXT_POSITIONS else DEFAULT_TEXT_POSITION
 
 
-def display_border(border, width, selected=False):
+def display_border(border, width, selected=False,
+                   selected_extra=DEFAULT_SELECTED_BORDER_EXTRA):
     """Return the temporary border appearance for normal/selected rendering."""
     border = normalize_rgba(border, DEFAULT_BORDER)
     width = normalize_int(width, DEFAULT_BORDER_WIDTH, 1, 12)
     if not selected:
         return border, width
-    return (*border[:3], 255), width + 2
+    selected_extra = normalize_int(
+        selected_extra, DEFAULT_SELECTED_BORDER_EXTRA, 0, 12)
+    return (*border[:3], 255), width + selected_extra
 
 
 def normalize_class_style(value=None, legacy_color=None):
@@ -106,6 +111,7 @@ def normalize_class_style(value=None, legacy_color=None):
         return {
             'border': legacy_border,
             'border_width': DEFAULT_BORDER_WIDTH,
+            'selected_border_extra': DEFAULT_SELECTED_BORDER_EXTRA,
             'fill': legacy_fill,
             'handle': DEFAULT_HANDLE,
             'handle_size': DEFAULT_HANDLE_SIZE,
@@ -118,6 +124,9 @@ def normalize_class_style(value=None, legacy_color=None):
         'border': border,
         'border_width': normalize_int(
             value.get('border_width'), DEFAULT_BORDER_WIDTH, 1, 12),
+        'selected_border_extra': normalize_int(
+            value.get('selected_border_extra'),
+            DEFAULT_SELECTED_BORDER_EXTRA, 0, 12),
         'fill': normalize_rgba(value.get('fill'), legacy_fill),
         'handle': normalize_rgba(value.get('handle'), DEFAULT_HANDLE),
         'handle_size': normalize_int(
@@ -145,6 +154,9 @@ def serialize_class_styles(styles):
         int(class_id): {
             'border': list(style['border']),
             'border_width': int(style['border_width']),
+            'selected_border_extra': normalize_int(
+                style.get('selected_border_extra'),
+                DEFAULT_SELECTED_BORDER_EXTRA, 0, 12),
             'fill': list(style['fill']),
             'handle': list(style['handle']),
             'handle_size': normalize_int(

@@ -67,6 +67,20 @@ class InferenceTaskTest(unittest.TestCase):
         self.assertEqual(len(payload['annotations'][0]), 9)
         self.assertEqual(payload['annotations'][0][0], 3)
 
+    def test_obb_output_clamps_corners_to_normalized_image_bounds(self):
+        result = SimpleNamespace(
+            boxes=None, masks=None, keypoints=None,
+            obb=SimpleNamespace(
+                cls=np.array([3]),
+                xyxyxyxyn=np.array([[[-0.08, 0.1], [1.06, 0.2],
+                                     [0.7, 1.02], [0.0, -0.04]]])))
+
+        payload = run_worker('obb', result)
+
+        self.assertEqual(payload['annotations'][0],
+                         [3, 0.0, 0.1, 1.0, 0.2,
+                          0.7, 1.0, 0.0, 0.0])
+
     def test_pose_output_includes_visibility(self):
         result = SimpleNamespace(
             masks=None, obb=None,

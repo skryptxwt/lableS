@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from utils.DataApp import DataApp
 
@@ -33,6 +34,24 @@ class DataAppTest(unittest.TestCase):
             labels.save()
 
             self.assertEqual(DataApp(path)[0], [2, 0.5, 0.4, 0.2, 0.1])
+            self.assertEqual(list(Path(directory).glob('*.tmp')), [])
+
+    def test_save_retries_temporary_windows_replace_denial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'labels.txt'
+            path.write_text('', encoding='utf-8')
+            labels = DataApp(path)
+            labels.append([0, 0.5, 0.5, 0.2, 0.2])
+
+            with patch(
+                    'utils.DataApp.os.replace',
+                    side_effect=[PermissionError(5, '拒绝访问'), None]
+                    ) as replace, patch(
+                        'utils.DataApp.time.sleep') as sleep:
+                labels.save()
+
+            self.assertEqual(replace.call_count, 2)
+            sleep.assert_called_once_with(0.015)
             self.assertEqual(list(Path(directory).glob('*.tmp')), [])
 
     def test_merge_deduplicates_labels(self):
@@ -86,6 +105,39 @@ class DataAppTest(unittest.TestCase):
                 DataApp(path, task='pose', kpt_shape=(2, 3))[0], pose)
             with self.assertRaisesRegex(ValueError, '可见性'):
                 labels[0] = pose[:-1] + [3]
+
+    def test_pose_prediction_confidence_converts_to_visibility_on_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'pose_prediction.txt'
+            path.write_text(
+                '0 0.5 0.5 0.4 0.6 0.4 0.4 0.9 0.6 0.4 0.3\n',
+                encoding='utf-8')
+
+            with self.assertRaisesRegex(ValueError, '可见性'):
+                DataApp(path, task='pose', kpt_shape=(2, 3))
+
+            labels = DataApp(
+                path, task='pose', kpt_shape=(2, 3),
+                accept_prediction_output=True)
+
+            self.assertEqual(labels.normalized_prediction_rows, 1)
+            self.assertEqual(labels[0], [
+                0, 0.5, 0.5, 0.4, 0.6,
+                0.4, 0.4, 2, 0.6, 0.4, 1])
+
+    def test_pose_training_visibility_is_unchanged_in_compatible_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'pose_training.txt'
+            path.write_text(
+                '0 0.5 0.5 0.4 0.6 0.4 0.4 2 0.6 0.4 0\n',
+                encoding='utf-8')
+
+            labels = DataApp(
+                path, task='pose', kpt_shape=(2, 3),
+                accept_prediction_output=True)
+
+            self.assertEqual(labels.normalized_prediction_rows, 0)
+            self.assertEqual(labels[0][-3:], [0.6, 0.4, 0.0])
 
 
 if __name__ == '__main__':

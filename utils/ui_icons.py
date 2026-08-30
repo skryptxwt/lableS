@@ -91,6 +91,12 @@ def toolbar_icon(name, size=18, color='#56616b'):
         painter.drawEllipse(QPointF(9.0, 5.5), 0.8, 0.8)
         painter.drawEllipse(QPointF(12.0, 7.0), 0.8, 0.8)
         painter.drawEllipse(QPointF(10.8, 11.2), 1.8, 1.4)
+    elif name == 'delete':
+        painter.drawRoundedRect(QRectF(5.0, 6.0, 8.0, 9.0), 1.0, 1.0)
+        painter.drawLine(QPointF(4.0, 4.8), QPointF(14.0, 4.8))
+        painter.drawLine(QPointF(7.0, 3.0), QPointF(11.0, 3.0))
+        painter.drawLine(QPointF(7.5, 8.0), QPointF(7.5, 13.0))
+        painter.drawLine(QPointF(10.5, 8.0), QPointF(10.5, 13.0))
 
     painter.end()
     pixmap.setDevicePixelRatio(ratio)

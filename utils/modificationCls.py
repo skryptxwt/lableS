@@ -14,8 +14,9 @@ from PyQt5.QtWidgets import (
 
 from .class_styles import (
     DEFAULT_BORDER, DEFAULT_BORDER_WIDTH, DEFAULT_FILL, DEFAULT_HANDLE,
-    DEFAULT_HANDLE_SIZE, DEFAULT_TEXT, DEFAULT_TEXT_POSITION, DEFAULT_TEXT_SIZE,
-    build_class_styles, default_class_style, normalize_class_style,
+    DEFAULT_HANDLE_SIZE, DEFAULT_SELECTED_BORDER_EXTRA, DEFAULT_TEXT,
+    DEFAULT_TEXT_POSITION, DEFAULT_TEXT_SIZE, build_class_styles,
+    default_class_style, display_border, normalize_class_style,
     serialize_class_styles,
 )
 from .common_fun import CONFIG_PATH, root
@@ -44,6 +45,7 @@ class ClassStylePreview(QWidget):
         self.class_name = '类别预览'
         self.border = DEFAULT_BORDER
         self.border_width = DEFAULT_BORDER_WIDTH
+        self.selected_border_extra = DEFAULT_SELECTED_BORDER_EXTRA
         self.fill = DEFAULT_FILL
         self.handle = DEFAULT_HANDLE
         self.handle_size = DEFAULT_HANDLE_SIZE
@@ -58,6 +60,7 @@ class ClassStylePreview(QWidget):
         self.class_name = name
         self.border = tuple(style['border'])
         self.border_width = style['border_width']
+        self.selected_border_extra = style['selected_border_extra']
         self.fill = tuple(style['fill'])
         self.handle = tuple(style['handle'])
         self.handle_size = style['handle_size']
@@ -88,8 +91,11 @@ class ClassStylePreview(QWidget):
             max(90, self.height() * 0.56),
         )
         painter.setBrush(QColor(*self.fill))
-        border_pen = QPen(QColor(*self.border))
-        border_pen.setWidthF(max(0.8, float(self.border_width)))
+        border, border_width = display_border(
+            self.border, self.border_width, selected=True,
+            selected_extra=self.selected_border_extra)
+        border_pen = QPen(QColor(*border))
+        border_pen.setWidthF(max(0.8, float(border_width)))
         border_pen.setCapStyle(Qt.RoundCap)
         border_pen.setJoinStyle(Qt.RoundJoin)
         painter.setPen(border_pen)
@@ -414,6 +420,14 @@ class modificationCls(QMainWindow):
         self.border_width_spin.setRange(1, 12)
         self.border_width_spin.setSuffix(' px')
         self.border_width_spin.setMinimumWidth(92)
+        selected_width_label = QLabel('选中加粗', geometry_panel)
+        selected_width_label.setObjectName('styleOptionTitle')
+        self.selected_border_extra_spin = QSpinBox(geometry_panel)
+        self.selected_border_extra_spin.setRange(0, 12)
+        self.selected_border_extra_spin.setSuffix(' px')
+        self.selected_border_extra_spin.setMinimumWidth(92)
+        self.selected_border_extra_spin.setToolTip(
+            '选中标注时，在普通边框粗细基础上额外增加的像素')
         handle_size_label = QLabel('锚点大小', geometry_panel)
         handle_size_label.setObjectName('styleOptionTitle')
         self.handle_size_spin = QSpinBox(geometry_panel)
@@ -434,12 +448,14 @@ class modificationCls(QMainWindow):
             self.text_position_combo.addItem(label, value)
         geometry_layout.addWidget(border_width_label, 0, 0)
         geometry_layout.addWidget(self.border_width_spin, 0, 1)
-        geometry_layout.addWidget(handle_size_label, 0, 2)
-        geometry_layout.addWidget(self.handle_size_spin, 0, 3)
-        geometry_layout.addWidget(text_size_label, 1, 0)
-        geometry_layout.addWidget(self.text_size_spin, 1, 1)
-        geometry_layout.addWidget(position_label, 1, 2)
-        geometry_layout.addWidget(self.text_position_combo, 1, 3)
+        geometry_layout.addWidget(selected_width_label, 0, 2)
+        geometry_layout.addWidget(self.selected_border_extra_spin, 0, 3)
+        geometry_layout.addWidget(handle_size_label, 1, 0)
+        geometry_layout.addWidget(self.handle_size_spin, 1, 1)
+        geometry_layout.addWidget(text_size_label, 1, 2)
+        geometry_layout.addWidget(self.text_size_spin, 1, 3)
+        geometry_layout.addWidget(position_label, 2, 0)
+        geometry_layout.addWidget(self.text_position_combo, 2, 1, 1, 3)
         geometry_layout.setColumnStretch(3, 1)
         geometry_panel_layout.addLayout(geometry_layout)
 
@@ -454,7 +470,7 @@ class modificationCls(QMainWindow):
             '应用到全部类别', common_geometry_row)
         self.btnApplyGeometryAll.setFixedWidth(126)
         self.btnApplyGeometryAll.setToolTip(
-            '把当前边框粗细、锚点大小、文字大小和位置应用到全部类别；颜色保持独立')
+            '把当前边框粗细、选中加粗、锚点大小、文字大小和位置应用到全部类别；颜色保持独立')
         self.btnApplyGeometryAll.clicked.connect(self.applyGeometryToAll)
         common_geometry_layout.addWidget(common_geometry_note)
         common_geometry_layout.addStretch(1)
@@ -469,6 +485,8 @@ class modificationCls(QMainWindow):
         self.handle_control.opacityChanged.connect(self._style_changed)
         self.text_control.opacityChanged.connect(self._style_changed)
         self.border_width_spin.valueChanged.connect(self._style_changed)
+        self.selected_border_extra_spin.valueChanged.connect(
+            self._style_changed)
         self.handle_size_spin.valueChanged.connect(self._style_changed)
         self.text_size_spin.valueChanged.connect(self._style_changed)
         self.text_position_combo.currentIndexChanged.connect(self._style_changed)
@@ -633,6 +651,8 @@ class modificationCls(QMainWindow):
         self.handle_control.set_rgba(style['handle'])
         self.text_control.set_rgba(style['text'])
         self.border_width_spin.setValue(style['border_width'])
+        self.selected_border_extra_spin.setValue(
+            style['selected_border_extra'])
         self.handle_size_spin.setValue(style['handle_size'])
         self.text_size_spin.setValue(style['text_size'])
         position_index = self.text_position_combo.findData(style['text_position'])
@@ -649,6 +669,7 @@ class modificationCls(QMainWindow):
         self.styles[class_id] = {
             'border': self.border_control.rgba(),
             'border_width': self.border_width_spin.value(),
+            'selected_border_extra': self.selected_border_extra_spin.value(),
             'fill': self.fill_control.rgba(),
             'handle': self.handle_control.rgba(),
             'handle_size': self.handle_size_spin.value(),
@@ -692,6 +713,7 @@ class modificationCls(QMainWindow):
             return
         shared_values = {
             'border_width': self.border_width_spin.value(),
+            'selected_border_extra': self.selected_border_extra_spin.value(),
             'handle_size': self.handle_size_spin.value(),
             'text_size': self.text_size_spin.value(),
             'text_position': self.text_position_combo.currentData(),
@@ -703,7 +725,7 @@ class modificationCls(QMainWindow):
         self._load_selected_style()
         self._notify_preview()
         self.hint.setText(
-            '已将边框粗细、锚点大小、文字大小和位置应用到全部类别；颜色保持独立。')
+            '已将边框粗细、选中加粗、锚点大小、文字大小和位置应用到全部类别；颜色保持独立。')
 
     def resetCurrentStyle(self):
         """Compatibility alias: reset now intentionally applies to all classes."""

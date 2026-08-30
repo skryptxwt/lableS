@@ -165,6 +165,34 @@ QLabel[role="sectionTitle"] {
     padding: 0 12px;
 }
 
+QWidget#objectSectionHeader {
+    background: rgba(249, 251, 252, 125);
+    border: 0;
+    border-bottom: 1px solid rgba(125, 141, 153, 115);
+}
+
+QPushButton#objectDeleteButton {
+    color: #6d7a83;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    padding: 0;
+}
+
+QPushButton#objectDeleteButton:hover {
+    color: #b44750;
+    background: rgba(213, 82, 91, 38);
+}
+
+QPushButton#objectDeleteButton:pressed {
+    background: rgba(213, 82, 91, 70);
+}
+
+QPushButton#objectDeleteButton:disabled {
+    color: #a8b1b7;
+    background: transparent;
+}
+
 QLabel#styleControlTitle,
 QLabel#styleOptionTitle {
     color: #26343d;
@@ -350,32 +378,40 @@ QWidget#hoverSliderPopup {
 
 QMenu#backgroundMenu,
 QMenu#modelMenu,
-QMenu#shortcutMenu {
+QMenu#shortcutMenu,
+QMenu#taskMenu {
     color: #303b43;
     background: #f7f8f9;
     border: 1px solid #b8c1c7;
     border-radius: 6px;
     padding: 5px;
+    font-family: "Microsoft YaHei UI";
+    font-size: 11px;
+    font-weight: 400;
 }
 
 QMenu#backgroundMenu::item,
 QMenu#modelMenu::item,
-QMenu#shortcutMenu::item {
+QMenu#shortcutMenu::item,
+QMenu#taskMenu::item {
     min-height: 28px;
     padding: 2px 24px 2px 10px;
     border-radius: 4px;
+    font-weight: 400;
 }
 
 QMenu#backgroundMenu::item:selected,
 QMenu#modelMenu::item:selected,
-QMenu#shortcutMenu::item:selected {
+QMenu#shortcutMenu::item:selected,
+QMenu#taskMenu::item:selected {
     color: #18242c;
     background: #e3e8eb;
 }
 
 QMenu#backgroundMenu::separator,
 QMenu#modelMenu::separator,
-QMenu#shortcutMenu::separator {
+QMenu#shortcutMenu::separator,
+QMenu#taskMenu::separator {
     height: 1px;
     margin: 4px 8px;
     background: #d2d8dc;

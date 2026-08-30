@@ -33,6 +33,10 @@ class DetectModel(QThread):
         self.task = task
         self.kpt_shape = tuple(kpt_shape)
 
+    @staticmethod
+    def _clamp_normalized(value):
+        return min(1.0, max(0.0, float(value)))
+
     def run(self):
         try:
             result = self.model(self.image, conf=self.confidence)[0]
@@ -52,7 +56,8 @@ class DetectModel(QThread):
                         classes, result.obb.xyxyxyxyn.tolist()):
                     annotations.append([
                         int(class_id),
-                        *(float(value) for point in corners for value in point),
+                        *(self._clamp_normalized(value)
+                          for point in corners for value in point),
                     ])
             elif task == 'pose' and result.keypoints is not None:
                 boxes = result.boxes.xywhn.tolist()

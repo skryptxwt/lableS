@@ -1,12 +1,13 @@
-from PyQt5 import QtGui
 from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtGui import QPixmap,  QImage
+from PyQt5.QtGui import QImage
 
 from .common_fun import read_img, resize_img
 
 
 class ImageLoader(QThread):
-    signal_image_loaded = pyqtSignal(QPixmap, int)
+    signal_image_loaded = pyqtSignal(QImage, int)
+    signal_progress = pyqtSignal(int, int, str)
+    signal_completed = pyqtSignal(int, int)
 
     def __init__(self, image_paths, preview_size=160):
         super().__init__()
@@ -14,18 +15,28 @@ class ImageLoader(QThread):
         self.preview_size = max(80, int(preview_size))
 
     def run(self):
+        total = len(self.image_paths)
+        errors = 0
         for index, path in enumerate(self.image_paths):
             if self.isInterruptionRequested():
                 return
-            pixmap = self.load_image(path)
-            self.signal_image_loaded.emit(pixmap, index)
+            try:
+                image = self.load_image(path)
+                self.signal_image_loaded.emit(image, index)
+            except Exception:
+                # A corrupt/unsupported image must not terminate the worker
+                # before it can report completion and release the busy UI.
+                errors += 1
+            self.signal_progress.emit(index + 1, total, str(path))
+        self.signal_completed.emit(total, errors)
 
     def load_image(self, file):
-        pixmap = read_img(file)
+        image_data = read_img(file)
         s = self.preview_size
-        temp = resize_img(pixmap, (s, s))
+        temp = resize_img(image_data, (s, s))
 
-        pixmap = QPixmap.fromImage(QtGui.QImage(temp.data, s,
-                                                s, s * 3,
-                                                QImage.Format_RGB888).rgbSwapped())  # 加载图像
-        return pixmap
+        # QPixmap is a GUI resource and must stay on the main thread. QImage
+        # is reentrant, and copy() detaches it from the temporary NumPy buffer.
+        return QImage(
+            temp.data, s, s, s * 3,
+            QImage.Format_RGB888).rgbSwapped().copy()
