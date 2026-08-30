@@ -377,6 +377,42 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual(window._pending_interaction_redraw, (
             'task_drag', {'cursor': (80, 90)}))
 
+    def test_detect_drag_renders_dashed_draft_instead_of_solid_box(self):
+        calls = []
+        frame = object()
+
+        class FakeImage:
+            label_save = [[0, 10, 20, 110, 80]]
+
+            @staticmethod
+            def overlay_frame():
+                return frame
+
+            @staticmethod
+            def label_show(index, **kwargs):
+                calls.append(('labels', index, kwargs))
+
+            @staticmethod
+            def draw_task_draft(**kwargs):
+                calls.append(('draft', kwargs))
+
+        window = SimpleNamespace(
+            img=FakeImage(),
+            is_choose_rect_index=0,
+            addBox=lambda redraw=True: calls.append(('add', redraw)),
+            label=SimpleNamespace(
+                setPixmap=lambda pixmap: calls.append(('commit', pixmap))),
+        )
+
+        MainWin._render_interaction_redraw(window, 'detect_add', {})
+
+        self.assertEqual(calls[0], ('add', False))
+        self.assertEqual(calls[1][0:2], ('labels', None))
+        self.assertEqual(calls[1][2]['excluded_index'], 0)
+        self.assertEqual(calls[2][0], 'draft')
+        self.assertEqual(calls[2][1]['bbox'], [10, 20, 110, 80])
+        self.assertIs(calls[-1][1], frame)
+
 
 if __name__ == '__main__':
     unittest.main()

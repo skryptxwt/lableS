@@ -2232,7 +2232,19 @@ class MainWin(QMainWindow):
             if index is None:
                 return
             frame = self.img.overlay_frame()
-            self.img.label_show(index, pixmap=frame, commit=False)
+            if kind == 'detect_add':
+                # The in-progress box already exists in label_save so it can
+                # be committed without rebuilding data on mouse release. Hide
+                # that temporary solid annotation in this frame and draw the
+                # same geometry as a dashed draft instead.
+                self.img.label_show(
+                    None, pixmap=frame, commit=False,
+                    excluded_index=index)
+                self.img.draw_task_draft(
+                    bbox=self.img.label_save[index][1:5],
+                    pixmap=frame, commit=False)
+            else:
+                self.img.label_show(index, pixmap=frame, commit=False)
             self.label.setPixmap(frame)
         elif kind == 'task_edit':
             if self.task_edit is None:

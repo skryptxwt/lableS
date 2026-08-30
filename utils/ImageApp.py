@@ -342,7 +342,8 @@ class Image(QMainWindow):
                 converted.append(int(values[offset + 2]))
         return converted
 
-    def label_show(self, index=None, pixmap=None, commit=True):
+    def label_show(self, index=None, pixmap=None, commit=True,
+                   excluded_index=None):
         if self.task != 'detect':
             self._label_show_task(index, pixmap=pixmap, commit=commit)
             return
@@ -396,6 +397,8 @@ class Image(QMainWindow):
             parent_colors = self.parent.colors if self.parent else None
             parent_styles = self.parent.class_styles if self.parent else None
             selected_index = self._normalized_index(index, label_count)
+            excluded_index = self._normalized_index(
+                excluded_index, label_count)
             target = pixmap or self.screen_label.pixmap()
             if target is None or not label_count:
                 return
@@ -407,6 +410,8 @@ class Image(QMainWindow):
             try:
                 for label_index in self._paint_order(
                         label_count, selected_index):
+                    if label_index == excluded_index:
+                        continue
                     label = self.label_save[label_index]
                     cls, x1, y1, x2, y2 = label
                     x1, y1 = self.org_xy_to_new_xy((x1, y1))
