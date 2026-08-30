@@ -1663,7 +1663,8 @@ class MainWin(QMainWindow):
             else:
                 self._clear_task_selection()
                 self.task_drag = {
-                    'start': tuple(position), 'current': tuple(position)}
+                    'start': tuple(position), 'current': tuple(position),
+                    'square': False}
                 self.mouse_left_press = True
             return True
 
@@ -1672,10 +1673,18 @@ class MainWin(QMainWindow):
                 self._redraw_task_draft(cursor=position)
                 return True
             if self.task_edit is not None and self.mouse_left_press:
-                self._update_task_edit(position)
+                self._update_task_edit(position, event.modifiers())
                 return True
             if self.task_drag is not None and self.mouse_left_press:
-                self.task_drag['current'] = tuple(self.limit_xy(*position))
+                end = tuple(self.limit_xy(*position))
+                square = bool(
+                    self.annotation_task == 'obb'
+                    and event.modifiers() & Qt.ShiftModifier)
+                if square:
+                    end = self._square_drag_end(
+                        self.task_drag['start'], end)
+                self.task_drag['current'] = end
+                self.task_drag['square'] = square
                 self._redraw_task_drag()
                 return True
             hit = self.img.task_hit_test(*position)
@@ -1695,6 +1704,9 @@ class MainWin(QMainWindow):
             if self.task_drag is not None:
                 start = self.task_drag['start']
                 end = tuple(self.limit_xy(*position))
+                if (self.annotation_task == 'obb'
+                        and event.modifiers() & Qt.ShiftModifier):
+                    end = self._square_drag_end(start, end)
                 self.task_drag = None
                 self.mouse_left_press = False
                 if distance(start, end) < 12:
@@ -1726,15 +1738,18 @@ class MainWin(QMainWindow):
     def _begin_task_edit(self, hit, position):
         kind, index, control = hit
         self._select_task_annotation(index)
+        original = list(self.img.label_save[index])
+        if self.annotation_task == 'obb':
+            original = self.img.canonicalize_obb_label(original)
         self.task_edit = {
             'kind': kind, 'index': index, 'control': control,
             'start_canvas': tuple(position),
             'start_org': self.img.new_xy_to_org_xy(position),
-            'original': list(self.img.label_save[index]),
+            'original': original,
         }
         self.mouse_left_press = True
 
-    def _update_task_edit(self, position):
+    def _update_task_edit(self, position, modifiers=Qt.NoModifier):
         edit = self.task_edit
         label = list(edit['original'])
         current_org = self.img.new_xy_to_org_xy(position)
@@ -1779,6 +1794,11 @@ class MainWin(QMainWindow):
                                + delta[1] * axis_next[1])
                 previous_length = (delta[0] * axis_previous[0]
                                    + delta[1] * axis_previous[1])
+                if modifiers & Qt.ShiftModifier:
+                    side = max(abs(next_length), abs(previous_length))
+                    next_length = math.copysign(side, next_length or 1.0)
+                    previous_length = math.copysign(
+                        side, previous_length or 1.0)
                 points[next_corner] = [
                     origin[0] + axis_next[0] * next_length,
                     origin[1] + axis_next[1] * next_length]
@@ -1821,13 +1841,8 @@ class MainWin(QMainWindow):
             current_angle = math.atan2(
                 current_org[1] - center_y, current_org[0] - center_x)
             angle = current_angle - start_angle
-            cosine, sine = math.cos(angle), math.sin(angle)
-            rotated = []
-            for point in points:
-                px, py = point[0] - center_x, point[1] - center_y
-                rotated.extend((center_x + px * cosine - py * sine,
-                                center_y + px * sine + py * cosine))
-            label = [label[0], *rotated]
+            label = self.img.rotate_obb_label(
+                label, math.degrees(angle))
         self.img.change_annotation(edit['index'], label)
         self.rect_save_current = [edit['index'], -1,
                                   self.img.label_save[edit['index']]]
@@ -1850,6 +1865,13 @@ class MainWin(QMainWindow):
                 f'POSE  |  1 / {self.kpt_shape[0]}  '
                 f'{self._pose_point_name(0)}  '
                 '|  Shift+左键=遮挡，右键=缺失')
+
+    @staticmethod
+    def _square_drag_end(start, end):
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        side = max(abs(dx), abs(dy))
+        return (start[0] + math.copysign(side, dx or 1.0),
+                start[1] + math.copysign(side, dy or 1.0))
 
     def _finish_segment(self):
         if len(self.task_draft_points) < 3:

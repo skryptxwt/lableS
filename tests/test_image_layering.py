@@ -25,6 +25,21 @@ class FakeImage:
 
 
 class ImageLayeringTest(unittest.TestCase):
+    def assertObbIsRectangle(self, label, places=6):
+        points = list(zip(label[1::2], label[2::2]))
+        edges = [
+            (points[(index + 1) % 4][0] - point[0],
+             points[(index + 1) % 4][1] - point[1])
+            for index, point in enumerate(points)
+        ]
+        self.assertAlmostEqual(
+            edges[0][0] * edges[1][0] + edges[0][1] * edges[1][1],
+            0.0, places=places)
+        self.assertAlmostEqual(edges[0][0], -edges[2][0], places=places)
+        self.assertAlmostEqual(edges[0][1], -edges[2][1], places=places)
+        self.assertAlmostEqual(edges[1][0], -edges[3][0], places=places)
+        self.assertAlmostEqual(edges[1][1], -edges[3][1], places=places)
+
     def test_paint_order_places_latest_box_last(self):
         self.assertEqual(Image._paint_order(3), [0, 1, 2])
 
@@ -88,6 +103,30 @@ class ImageLayeringTest(unittest.TestCase):
         rotated = Image.rotate_obb_label(label, 0.25)
 
         self.assertAlmostEqual(Image.obb_angle(rotated), 0.25)
+
+    def test_irregular_obb_is_rebuilt_as_a_rectangle(self):
+        irregular = [
+            3, 420, 133, 756, 451, 545, 589, 209, 357,
+        ]
+
+        repaired = Image.canonicalize_obb_label(irregular)
+
+        self.assertObbIsRectangle(repaired)
+
+    def test_rotated_obb_fits_image_without_clipping_individual_corners(self):
+        label = [0, 50, 100, 450, 100, 450, 300, 50, 300]
+        rotated = Image.rotate_obb_label(label, 45)
+
+        fitted = Image.fit_obb_label(rotated, 500, 400)
+
+        self.assertObbIsRectangle(fitted)
+        self.assertTrue(all(0 <= x <= 500 for x in fitted[1::2]))
+        self.assertTrue(all(0 <= y <= 400 for y in fitted[2::2]))
+
+    def test_shift_drag_locks_obb_to_square(self):
+        end = MainWin._square_drag_end((10, 20), (80, 50))
+
+        self.assertEqual(end, (80.0, 90.0))
 
     def test_selected_obb_rotates_with_mouse_wheel(self):
         class WheelImage:

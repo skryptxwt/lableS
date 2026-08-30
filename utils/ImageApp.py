@@ -287,7 +287,11 @@ class Image(QMainWindow):
             for offset in range(0, len(values), 2):
                 points.extend((values[offset] * self.org_width,
                                values[offset + 1] * self.org_height))
-            return [cls, *points]
+            label = [cls, *points]
+            if self.task == 'obb':
+                return self.fit_obb_label(
+                    label, self.org_width, self.org_height)
+            return label
         x, y, w, h = values[:4]
         converted = [cls, (x - w / 2) * self.org_width,
                      (y - h / 2) * self.org_height,
@@ -511,8 +515,7 @@ class Image(QMainWindow):
     @staticmethod
     def rotate_obb_label(label, degrees):
         """Rotate a YOLO OBB label around its center, preserving its size."""
-        if len(label) != 9:
-            raise ValueError('OBB 标签必须包含类别和 4 个角点')
+        label = Image.canonicalize_obb_label(label)
         points = [label[offset:offset + 2]
                   for offset in range(1, len(label), 2)]
         center_x = sum(point[0] for point in points) / 4
@@ -525,6 +528,80 @@ class Image(QMainWindow):
             rotated.extend((center_x + px * cosine - py * sine,
                             center_y + px * sine + py * cosine))
         return [int(label[0]), *rotated]
+
+    @staticmethod
+    def canonicalize_obb_label(label):
+        """Rebuild four ordered points as a true rectangle.
+
+        Point-wise clipping can turn a rotated rectangle into an irregular
+        quadrilateral.  Deriving two perpendicular local axes first keeps
+        opposite sides parallel and every corner at 90 degrees.
+        """
+        if len(label) != 9:
+            raise ValueError('OBB 标签必须包含类别和 4 个角点')
+        points = np.asarray(list(zip(label[1::2], label[2::2])),
+                            dtype=np.float64)
+        center = points.mean(axis=0)
+        axis_u = (points[1] - points[0]) + (points[2] - points[3])
+        length_u = float(np.linalg.norm(axis_u))
+        if length_u < 1e-9:
+            axis_u = points[1] - points[0]
+            length_u = float(np.linalg.norm(axis_u))
+        if length_u < 1e-9:
+            axis_u = np.asarray((1.0, 0.0))
+            length_u = 1.0
+        axis_u /= length_u
+        axis_v = np.asarray((-axis_u[1], axis_u[0]))
+        direction_v = (points[3] - points[0]) + (points[2] - points[1])
+        if float(np.dot(axis_v, direction_v)) < 0:
+            axis_v *= -1
+
+        offsets = points - center
+        half_width = max(
+            float(np.mean(np.abs(offsets @ axis_u))), 0.5)
+        half_height = max(
+            float(np.mean(np.abs(offsets @ axis_v))), 0.5)
+        corners = np.asarray((
+            center - axis_u * half_width - axis_v * half_height,
+            center + axis_u * half_width - axis_v * half_height,
+            center + axis_u * half_width + axis_v * half_height,
+            center - axis_u * half_width + axis_v * half_height,
+        ))
+        return [int(label[0]), *corners.reshape(-1).tolist()]
+
+    @staticmethod
+    def fit_obb_label(label, image_width, image_height):
+        """Keep an OBB rectangular while fitting all corners in the image."""
+        label = Image.canonicalize_obb_label(label)
+        points = np.asarray(list(zip(label[1::2], label[2::2])),
+                            dtype=np.float64)
+        image_width = max(float(image_width), 1.0)
+        image_height = max(float(image_height), 1.0)
+        span = np.ptp(points, axis=0)
+        scale = min(
+            1.0,
+            image_width / span[0] if span[0] > image_width else 1.0,
+            image_height / span[1] if span[1] > image_height else 1.0,
+        )
+        if scale < 1.0:
+            center = points.mean(axis=0)
+            points = center + (points - center) * scale
+
+        minimum = points.min(axis=0)
+        maximum = points.max(axis=0)
+        shift = np.zeros(2, dtype=np.float64)
+        if minimum[0] < 0:
+            shift[0] = -minimum[0]
+        elif maximum[0] > image_width:
+            shift[0] = image_width - maximum[0]
+        if minimum[1] < 0:
+            shift[1] = -minimum[1]
+        elif maximum[1] > image_height:
+            shift[1] = image_height - maximum[1]
+        points += shift
+        points[:, 0] = np.clip(points[:, 0], 0.0, image_width)
+        points[:, 1] = np.clip(points[:, 1], 0.0, image_height)
+        return [int(label[0]), *points.reshape(-1).tolist()]
 
     @staticmethod
     def obb_angle(label):
@@ -786,7 +863,15 @@ class Image(QMainWindow):
 
     def _normalize_annotation(self, label):
         cls = int(label[0])
-        if self.task in ('segment', 'obb'):
+        if self.task == 'obb':
+            fitted = self.fit_obb_label(
+                label, self.org_width, self.org_height)
+            coordinates = []
+            for offset in range(1, len(fitted), 2):
+                coordinates.extend((fitted[offset] / self.org_width,
+                                    fitted[offset + 1] / self.org_height))
+            return [cls, *coordinates]
+        if self.task == 'segment':
             coordinates = []
             for offset in range(1, len(label), 2):
                 x, y = self._clamp_point(label[offset:offset + 2])
