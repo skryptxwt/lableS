@@ -5,6 +5,7 @@ import colorsys
 DEFAULT_BORDER = (36, 155, 200, 230)
 DEFAULT_FILL = (36, 155, 200, 50)
 DEFAULT_HANDLE = (238, 68, 75, 230)
+DEFAULT_HANDLE_SIZE = 8
 DEFAULT_BORDER_WIDTH = 2
 DEFAULT_TEXT = (36, 155, 200, 255)
 DEFAULT_TEXT_SIZE = 10
@@ -39,6 +40,7 @@ def default_class_style(class_id):
         'border_width': DEFAULT_BORDER_WIDTH,
         'fill': (red, green, blue, DEFAULT_FILL[3]),
         'handle': (red, green, blue, 255),
+        'handle_size': DEFAULT_HANDLE_SIZE,
         'text': (red, green, blue, DEFAULT_TEXT[3]),
         'text_size': DEFAULT_TEXT_SIZE,
         'text_position': DEFAULT_TEXT_POSITION,
@@ -106,6 +108,7 @@ def normalize_class_style(value=None, legacy_color=None):
             'border_width': DEFAULT_BORDER_WIDTH,
             'fill': legacy_fill,
             'handle': DEFAULT_HANDLE,
+            'handle_size': DEFAULT_HANDLE_SIZE,
             'text': legacy_text,
             'text_size': DEFAULT_TEXT_SIZE,
             'text_position': DEFAULT_TEXT_POSITION,
@@ -117,6 +120,8 @@ def normalize_class_style(value=None, legacy_color=None):
             value.get('border_width'), DEFAULT_BORDER_WIDTH, 1, 12),
         'fill': normalize_rgba(value.get('fill'), legacy_fill),
         'handle': normalize_rgba(value.get('handle'), DEFAULT_HANDLE),
+        'handle_size': normalize_int(
+            value.get('handle_size'), DEFAULT_HANDLE_SIZE, 4, 20),
         'text': normalize_rgba(
             value.get('text'), (*border[:3], DEFAULT_TEXT[3])),
         'text_size': normalize_int(
@@ -142,6 +147,8 @@ def serialize_class_styles(styles):
             'border_width': int(style['border_width']),
             'fill': list(style['fill']),
             'handle': list(style['handle']),
+            'handle_size': normalize_int(
+                style.get('handle_size'), DEFAULT_HANDLE_SIZE, 4, 20),
             'text': list(style['text']),
             'text_size': int(style['text_size']),
             'text_position': style['text_position'],

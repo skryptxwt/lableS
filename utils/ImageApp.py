@@ -198,8 +198,8 @@ class Image(QMainWindow):
         painter.drawRect(rect)
 
         if is_show_nine_circle and self.show_box_circle:
-            circle_radius = circle_radius * self.wheel_scale if circle_radius * self.wheel_scale ** 2 < 1 else circle_radius
-            radius = max(1.5, float(circle_radius) / 2)
+            # 锚点是界面控件，保持屏幕像素大小，避免缩放图像后忽大忽小。
+            radius = max(2.0, float(circle_radius) / 2)
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(*point_color))
             for point in self.circle_nine(*x1y1, *x2y2):
@@ -364,7 +364,8 @@ class Image(QMainWindow):
             self.add_rect((x1, y1), (x2, y2), box_cls,
                           style['fill'], style['border'],
                           style['handle'], style['border_width'],
-                          circle_radius=8, text_size=style['text_size'],
+                          circle_radius=style['handle_size'],
+                          text_size=style['text_size'],
                           is_over_striking=True, text_color=style['text'],
                           text_position=style['text_position'])
             return
@@ -376,8 +377,6 @@ class Image(QMainWindow):
             parent_names = self.parent.names if self.parent else None
             parent_colors = self.parent.colors if self.parent else None
             parent_styles = self.parent.class_styles if self.parent else None
-            circle_radius_val = 8
-
             selected_index = self._normalized_index(index, label_count)
             pixmap = self.screen_label.pixmap()
             if pixmap is None or not label_count:
@@ -404,7 +403,8 @@ class Image(QMainWindow):
                     self.add_rect(
                         (x1, y1), (x2, y2), f'{box_cls}',
                         style['fill'], style['border'], style['handle'],
-                        style['border_width'], circle_radius=circle_radius_val,
+                        style['border_width'],
+                        circle_radius=style['handle_size'],
                         text_size=style['text_size'],
                         is_over_striking=selected_index == label_index,
                         text_color=style['text'],
@@ -415,9 +415,12 @@ class Image(QMainWindow):
 
     def _class_style(self, class_id):
         class_id = int(class_id)
+        parent = getattr(self, 'parent', None)
+        styles = getattr(parent, 'class_styles', None)
+        colors = getattr(parent, 'colors', None)
         return normalize_class_style(
-            self.parent.class_styles.get(class_id) if self.parent else None,
-            self.parent.colors.get(class_id) if self.parent else None)
+            styles.get(class_id) if styles else None,
+            colors.get(class_id) if colors else None)
 
     def _class_name(self, class_id):
         class_id = int(class_id)
@@ -471,14 +474,23 @@ class Image(QMainWindow):
         if self.show_box_circle and selected:
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(*style['handle']))
+            handle_size = float(style['handle_size'])
+            handle_radius = handle_size / 2
+            corner_radius = min(2.5, handle_radius / 2)
             for point in points:
                 painter.drawRoundedRect(
-                    QRectF(point.x() - 4, point.y() - 4, 8, 8), 2, 2)
+                    QRectF(point.x() - handle_radius,
+                           point.y() - handle_radius,
+                           handle_size, handle_size),
+                    corner_radius, corner_radius)
             if rotated and len(points) == 4:
+                edge_height = max(4.0, handle_size * 0.72)
                 for edge in self.obb_edge_handles(points):
                     painter.drawRoundedRect(
-                        QRectF(edge.x() - 4, edge.y() - 3, 8, 6),
-                        2, 2)
+                        QRectF(edge.x() - handle_radius,
+                               edge.y() - edge_height / 2,
+                               handle_size, edge_height),
+                        corner_radius, corner_radius)
                 handle = self.obb_rotation_handle(points)
                 midpoint = QPointF(
                     (points[0].x() + points[1].x()) / 2,
@@ -486,7 +498,7 @@ class Image(QMainWindow):
                 painter.setPen(self._annotation_pen(border, 1))
                 painter.drawLine(midpoint, handle)
                 painter.setPen(Qt.NoPen)
-                painter.drawEllipse(handle, 5, 5)
+                painter.drawEllipse(handle, handle_radius, handle_radius)
 
         if self.show_box_text and points:
             painter.setFont(self._annotation_font(style['text_size']))
@@ -528,8 +540,9 @@ class Image(QMainWindow):
             painter.setPen(self._annotation_pen(style['border'], 2))
             painter.setBrush(
                 QColor(*style['handle']) if visibility == 2 else Qt.NoBrush)
-            painter.drawEllipse(point, 4 if selected else 3,
-                                4 if selected else 3)
+            selected_radius = float(style['handle_size']) / 2
+            radius = selected_radius if selected else max(2.0, selected_radius * .75)
+            painter.drawEllipse(point, radius, radius)
 
     @staticmethod
     def obb_rotation_handle(points, distance=28):
@@ -731,6 +744,9 @@ class Image(QMainWindow):
         """Return (kind, annotation index, control index) for non-box tasks."""
         for label_index in range(len(self.label_save) - 1, -1, -1):
             label = self.label_save[label_index]
+            style = Image._class_style(self, label[0])
+            handle_distance = max(
+                float(distance), float(style['handle_size']) / 2 + 4)
             if self.task in ('segment', 'obb'):
                 points = [
                     QPointF(*self.org_xy_to_new_xy(label[offset:offset + 2]))
@@ -738,10 +754,12 @@ class Image(QMainWindow):
                 ]
                 if self.task == 'obb':
                     rotation = self.obb_rotation_handle(points)
-                    if math.hypot(x - rotation.x(), y - rotation.y()) <= distance:
+                    if math.hypot(
+                            x - rotation.x(), y - rotation.y()) <= handle_distance:
                         return 'rotate', label_index, -1
                 for point_index, point in enumerate(points):
-                    if math.hypot(x - point.x(), y - point.y()) <= distance:
+                    if math.hypot(
+                            x - point.x(), y - point.y()) <= handle_distance:
                         return 'vertex', label_index, point_index
                 if self.task == 'segment':
                     for edge_index, start in enumerate(points):
@@ -756,7 +774,7 @@ class Image(QMainWindow):
                     for edge_index, point in enumerate(
                             self.obb_edge_handles(points)):
                         if math.hypot(
-                                x - point.x(), y - point.y()) <= distance:
+                                x - point.x(), y - point.y()) <= handle_distance:
                             return 'edge', label_index, edge_index
                 if QPolygonF(points).containsPoint(
                         QPointF(x, y), Qt.OddEvenFill):
@@ -772,14 +790,16 @@ class Image(QMainWindow):
                         continue
                     point = self.org_xy_to_new_xy(
                         raw_points[offset:offset + 2])
-                    if math.hypot(x - point[0], y - point[1]) <= distance:
+                    if math.hypot(
+                            x - point[0], y - point[1]) <= handle_distance:
                         return 'keypoint', label_index, point_index
                 p1 = self.org_xy_to_new_xy(label[1:3])
                 p2 = self.org_xy_to_new_xy(label[3:5])
                 bbox_points = (
                     p1, (p2[0], p1[1]), p2, (p1[0], p2[1]))
                 for point_index, point in enumerate(bbox_points):
-                    if math.hypot(x - point[0], y - point[1]) <= distance:
+                    if math.hypot(
+                            x - point[0], y - point[1]) <= handle_distance:
                         return 'bbox_vertex', label_index, point_index
                 left, right = sorted((p1[0], p2[0]))
                 top, bottom = sorted((p1[1], p2[1]))
@@ -917,11 +937,15 @@ class Image(QMainWindow):
         """Hit the visually topmost box, where the latest box is on top."""
         for i in self._hit_test_indices():
             rect = self.label_save[i]
+            style = Image._class_style(self, rect[0])
+            handle_distance = max(
+                float(circle_distance), float(style['handle_size']) / 2 + 4)
             x1y1 = self.org_xy_to_new_xy(rect[1:3])
             x2y2 = self.org_xy_to_new_xy(rect[3:5])
             for point_index, point in enumerate(self.circle_nine(
                     x1y1[0], x1y1[1], x2y2[0], x2y2[1])):
-                if math.hypot(x - point[0], y - point[1]) < circle_distance:
+                if math.hypot(
+                        x - point[0], y - point[1]) < handle_distance:
                     return 'handle', i, point_index
             left, right = sorted((x1y1[0], x2y2[0]))
             top, bottom = sorted((x1y1[1], x2y2[1]))
@@ -1081,21 +1105,24 @@ class Image(QMainWindow):
                 else:
                     painter.drawPolyline(QPolygonF(path_points))
             painter.setBrush(QColor(*style['handle']))
+            handle_radius = float(style['handle_size']) / 2
             for point in canvas_points:
-                painter.drawEllipse(point, 4, 4)
+                painter.drawEllipse(point, handle_radius, handle_radius)
             if close_polygon and len(canvas_points) >= 3:
                 painter.setBrush(Qt.NoBrush)
                 painter.setPen(self._annotation_pen(border, max(2, width)))
-                painter.drawEllipse(canvas_points[0], 9, 9)
+                close_radius = max(9.0, handle_radius + 4)
+                painter.drawEllipse(canvas_points[0], close_radius, close_radius)
         if bbox is not None:
             p1 = QPointF(*self.org_xy_to_new_xy(bbox[:2]))
             p2 = QPointF(*self.org_xy_to_new_xy(bbox[2:]))
             painter.drawRect(QRectF(p1, p2).normalized())
         if pose_points:
             painter.setBrush(QColor(*style['handle']))
+            handle_radius = float(style['handle_size']) / 2
             for point in pose_points:
                 canvas_point = QPointF(*self.org_xy_to_new_xy(point))
-                painter.drawEllipse(canvas_point, 4, 4)
+                painter.drawEllipse(canvas_point, handle_radius, handle_radius)
         painter.end()
         self.screen_label.setPixmap(pixmap)
 

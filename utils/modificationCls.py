@@ -7,15 +7,16 @@ from PyQt5.QtCore import QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAbstractItemView, QColorDialog, QComboBox, QDesktopWidget, QHBoxLayout,
-    QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout,
-    QWidget,
+    QFrame, QGridLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem,
+    QMainWindow, QMessageBox, QPushButton, QSizePolicy, QSlider, QSpinBox,
+    QVBoxLayout, QWidget,
 )
 
 from .class_styles import (
     DEFAULT_BORDER, DEFAULT_BORDER_WIDTH, DEFAULT_FILL, DEFAULT_HANDLE,
-    DEFAULT_TEXT, DEFAULT_TEXT_POSITION, DEFAULT_TEXT_SIZE, build_class_styles,
-    default_class_style, normalize_class_style, serialize_class_styles,
+    DEFAULT_HANDLE_SIZE, DEFAULT_TEXT, DEFAULT_TEXT_POSITION, DEFAULT_TEXT_SIZE,
+    build_class_styles, default_class_style, normalize_class_style,
+    serialize_class_styles,
 )
 from .common_fun import root
 from .industrial_theme import INDUSTRIAL_QSS
@@ -45,6 +46,7 @@ class ClassStylePreview(QWidget):
         self.border_width = DEFAULT_BORDER_WIDTH
         self.fill = DEFAULT_FILL
         self.handle = DEFAULT_HANDLE
+        self.handle_size = DEFAULT_HANDLE_SIZE
         self.text = DEFAULT_TEXT
         self.text_size = DEFAULT_TEXT_SIZE
         self.text_position = DEFAULT_TEXT_POSITION
@@ -58,6 +60,7 @@ class ClassStylePreview(QWidget):
         self.border_width = style['border_width']
         self.fill = tuple(style['fill'])
         self.handle = tuple(style['handle'])
+        self.handle_size = style['handle_size']
         self.text = tuple(style['text'])
         self.text_size = style['text_size']
         self.text_position = style['text_position']
@@ -94,6 +97,8 @@ class ClassStylePreview(QWidget):
 
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(*self.handle))
+        handle_size = float(self.handle_size)
+        handle_radius = handle_size / 2
         points = (
             sample.topLeft(), sample.topRight(), sample.bottomLeft(),
             sample.bottomRight(),
@@ -105,7 +110,11 @@ class ClassStylePreview(QWidget):
         )
         for point in points:
             painter.drawRoundedRect(
-                QRectF(point.x() - 4, point.y() - 4, 8, 8), 1.5, 1.5)
+                QRectF(point.x() - handle_radius,
+                       point.y() - handle_radius,
+                       handle_size, handle_size),
+                min(2.5, handle_radius / 2),
+                min(2.5, handle_radius / 2))
 
         text_font = QFont('Microsoft YaHei UI')
         text_font.setPixelSize(self.text_size)
@@ -190,10 +199,17 @@ class StyleControl(QWidget):
         self.colorChanged.emit(color)
 
     def _update_swatch(self):
-        foreground = '#ffffff' if self.color.lightness() < 140 else '#1e2930'
+        border = self.color.darker(115).name()
         self.color_button.setStyleSheet(
-            f'background: {self.color.name()}; color: {foreground}; '
-            'border: 1px solid #82919a; border-radius: 4px;')
+            'QPushButton {'
+            'background: rgba(250, 252, 253, 232); color: #293943; '
+            f'border: 1px solid #a8b4bc; border-left: 7px solid {border}; '
+            'border-radius: 5px; padding: 0 8px;'
+            '}'
+            'QPushButton:hover {'
+            f'background: {self.color.lighter(190).name()}; '
+            f'border-color: {border};'
+            '}')
 
     def _opacity_changed(self, value):
         self.opacity_value.setText(f'{value}%')
@@ -235,8 +251,8 @@ class modificationCls(QMainWindow):
             self.save_path = path if path.is_absolute() else root / path
 
     def initUI(self):
-        self.resize(820, 650)
-        self.setMinimumSize(720, 570)
+        self.resize(880, 700)
+        self.setMinimumSize(760, 620)
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         screen = QDesktopWidget().availableGeometry(self)
         self.move(
@@ -258,16 +274,17 @@ class modificationCls(QMainWindow):
         central = QWidget(shell)
         central.setObjectName('centralwidget')
         root_layout = QHBoxLayout(central)
-        root_layout.setContentsMargins(12, 12, 12, 12)
-        root_layout.setSpacing(12)
+        root_layout.setContentsMargins(14, 14, 14, 14)
+        root_layout.setSpacing(14)
         shell_layout.addWidget(central, 1)
         self.setCentralWidget(shell)
 
         left = QWidget(central)
+        left.setObjectName('classStyleSidebar')
         left.setFixedWidth(220)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(7)
+        left_layout.setContentsMargins(8, 8, 8, 8)
+        left_layout.setSpacing(8)
         heading = QLabel('类别', left)
         heading.setProperty('role', 'sectionTitle')
         heading.setFixedHeight(34)
@@ -291,70 +308,100 @@ class modificationCls(QMainWindow):
         left_layout.addLayout(button_row)
         self.btnReset = QPushButton('全部类别恢复默认值', left)
         self.btnReset.setToolTip('恢复通用尺寸设置，并为每个类别重新分配专属颜色')
-        self.btnReset.setToolTip('将全部类别的标注样式恢复为默认值')
         self.btnReset.clicked.connect(self.resetAllStyles)
         left_layout.addWidget(self.btnReset)
 
         right = QWidget(central)
+        right.setObjectName('classStyleEditor')
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(9)
         preview_heading = QLabel('样式预览', right)
         preview_heading.setProperty('role', 'sectionTitle')
         preview_heading.setFixedHeight(34)
         self.preview = ClassStylePreview(right)
+
+        color_panel = QFrame(right)
+        color_panel.setObjectName('styleControlsCard')
+        color_layout = QVBoxLayout(color_panel)
+        color_layout.setContentsMargins(12, 8, 12, 10)
+        color_layout.setSpacing(5)
+        color_heading = QLabel('颜色与透明度', color_panel)
+        color_heading.setProperty('role', 'cardTitle')
+        color_layout.addWidget(color_heading)
         self.border_control = StyleControl('边框', right)
         self.fill_control = StyleControl('内部填充', right)
         self.handle_control = StyleControl('锚点', right)
         self.text_control = StyleControl('类别文字', right)
+        color_layout.addWidget(self.border_control)
+        color_layout.addWidget(self.fill_control)
+        color_layout.addWidget(self.handle_control)
+        color_layout.addWidget(self.text_control)
 
-        geometry_row = QWidget(right)
-        geometry_layout = QHBoxLayout(geometry_row)
+        geometry_panel = QFrame(right)
+        geometry_panel.setObjectName('geometryCard')
+        geometry_panel_layout = QVBoxLayout(geometry_panel)
+        geometry_panel_layout.setContentsMargins(12, 8, 12, 9)
+        geometry_panel_layout.setSpacing(7)
+        geometry_heading = QLabel('尺寸与文字', geometry_panel)
+        geometry_heading.setProperty('role', 'cardTitle')
+        geometry_panel_layout.addWidget(geometry_heading)
+        geometry_layout = QGridLayout()
         geometry_layout.setContentsMargins(0, 0, 0, 0)
-        geometry_layout.setSpacing(8)
-        border_width_label = QLabel('边框粗细', geometry_row)
+        geometry_layout.setHorizontalSpacing(10)
+        geometry_layout.setVerticalSpacing(7)
+        border_width_label = QLabel('边框粗细', geometry_panel)
         border_width_label.setObjectName('styleOptionTitle')
-        border_width_label.setFixedWidth(66)
-        self.border_width_spin = QSpinBox(geometry_row)
+        self.border_width_spin = QSpinBox(geometry_panel)
         self.border_width_spin.setRange(1, 12)
         self.border_width_spin.setSuffix(' px')
-        self.border_width_spin.setFixedWidth(92)
-        text_size_label = QLabel('文字大小', geometry_row)
+        self.border_width_spin.setMinimumWidth(92)
+        handle_size_label = QLabel('锚点大小', geometry_panel)
+        handle_size_label.setObjectName('styleOptionTitle')
+        self.handle_size_spin = QSpinBox(geometry_panel)
+        self.handle_size_spin.setRange(4, 20)
+        self.handle_size_spin.setSuffix(' px')
+        self.handle_size_spin.setMinimumWidth(92)
+        self.handle_size_spin.setToolTip('调整锚点的宽度/直径，画布命中范围会同步变化')
+        text_size_label = QLabel('文字大小', geometry_panel)
         text_size_label.setObjectName('styleOptionTitle')
-        self.text_size_spin = QSpinBox(geometry_row)
+        self.text_size_spin = QSpinBox(geometry_panel)
         self.text_size_spin.setRange(6, 48)
         self.text_size_spin.setSuffix(' px')
-        self.text_size_spin.setFixedWidth(92)
-        position_label = QLabel('文字位置', geometry_row)
+        self.text_size_spin.setMinimumWidth(92)
+        position_label = QLabel('文字位置', geometry_panel)
         position_label.setObjectName('styleOptionTitle')
-        self.text_position_combo = QComboBox(geometry_row)
+        self.text_position_combo = QComboBox(geometry_panel)
         for label, value in TEXT_POSITION_LABELS:
             self.text_position_combo.addItem(label, value)
-        geometry_layout.addWidget(border_width_label)
-        geometry_layout.addWidget(self.border_width_spin)
-        geometry_layout.addSpacing(8)
-        geometry_layout.addWidget(text_size_label)
-        geometry_layout.addWidget(self.text_size_spin)
-        geometry_layout.addSpacing(8)
-        geometry_layout.addWidget(position_label)
-        geometry_layout.addWidget(self.text_position_combo, 1)
+        geometry_layout.addWidget(border_width_label, 0, 0)
+        geometry_layout.addWidget(self.border_width_spin, 0, 1)
+        geometry_layout.addWidget(handle_size_label, 0, 2)
+        geometry_layout.addWidget(self.handle_size_spin, 0, 3)
+        geometry_layout.addWidget(text_size_label, 1, 0)
+        geometry_layout.addWidget(self.text_size_spin, 1, 1)
+        geometry_layout.addWidget(position_label, 1, 2)
+        geometry_layout.addWidget(self.text_position_combo, 1, 3)
+        geometry_layout.setColumnStretch(3, 1)
+        geometry_panel_layout.addLayout(geometry_layout)
 
-        common_geometry_row = QWidget(right)
+        common_geometry_row = QWidget(geometry_panel)
         common_geometry_layout = QHBoxLayout(common_geometry_row)
         common_geometry_layout.setContentsMargins(0, 0, 0, 0)
         common_geometry_layout.setSpacing(8)
         common_geometry_note = QLabel(
-            '统一边框粗细、文字大小和位置', common_geometry_row)
+            '可统一尺寸和文字布局，颜色仍按类别独立', common_geometry_row)
         common_geometry_note.setStyleSheet('color: #53646e; padding-left: 2px;')
         self.btnApplyGeometryAll = QPushButton(
             '应用到全部类别', common_geometry_row)
         self.btnApplyGeometryAll.setFixedWidth(126)
         self.btnApplyGeometryAll.setToolTip(
-            '把当前边框粗细、文字大小和文字位置应用到全部类别；颜色保持独立')
+            '把当前边框粗细、锚点大小、文字大小和位置应用到全部类别；颜色保持独立')
         self.btnApplyGeometryAll.clicked.connect(self.applyGeometryToAll)
         common_geometry_layout.addWidget(common_geometry_note)
         common_geometry_layout.addStretch(1)
         common_geometry_layout.addWidget(self.btnApplyGeometryAll)
+        geometry_panel_layout.addWidget(common_geometry_row)
         self.border_control.colorChanged.connect(self._style_changed)
         self.fill_control.colorChanged.connect(self._style_changed)
         self.handle_control.colorChanged.connect(self._style_changed)
@@ -364,18 +411,15 @@ class modificationCls(QMainWindow):
         self.handle_control.opacityChanged.connect(self._style_changed)
         self.text_control.opacityChanged.connect(self._style_changed)
         self.border_width_spin.valueChanged.connect(self._style_changed)
+        self.handle_size_spin.valueChanged.connect(self._style_changed)
         self.text_size_spin.valueChanged.connect(self._style_changed)
         self.text_position_combo.currentIndexChanged.connect(self._style_changed)
         self.hint = QLabel('修改会实时预览；确认后保存，取消或关闭将撤销。', right)
         self.hint.setStyleSheet('color: #667780; padding: 2px;')
         right_layout.addWidget(preview_heading)
         right_layout.addWidget(self.preview, 1)
-        right_layout.addWidget(self.border_control)
-        right_layout.addWidget(self.fill_control)
-        right_layout.addWidget(self.handle_control)
-        right_layout.addWidget(self.text_control)
-        right_layout.addWidget(geometry_row)
-        right_layout.addWidget(common_geometry_row)
+        right_layout.addWidget(color_panel)
+        right_layout.addWidget(geometry_panel)
         right_layout.addWidget(self.hint)
 
         action_row = QHBoxLayout()
@@ -395,7 +439,37 @@ class modificationCls(QMainWindow):
         root_layout.addWidget(right, 1)
 
         self._rebuild_list(self.selected_class)
-        self.setStyleSheet(INDUSTRIAL_QSS)
+        self.setStyleSheet(INDUSTRIAL_QSS + r'''
+            QWidget#classStyleSidebar,
+            QFrame#styleControlsCard,
+            QFrame#geometryCard {
+                background: rgba(247, 250, 252, 185);
+                border: 1px solid rgba(150, 164, 174, 125);
+                border-radius: 8px;
+            }
+            QWidget#classStyleSidebar QLabel[role="sectionTitle"] {
+                background: transparent;
+                border-bottom: 1px solid rgba(139, 154, 165, 105);
+                padding: 0 8px;
+            }
+            QLabel[role="cardTitle"] {
+                color: #31424c;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 0 1px 4px 1px;
+            }
+            QWidget#classStylePreview {
+                border: 1px solid rgba(145, 159, 169, 125);
+                border-radius: 7px;
+            }
+            QFrame#styleControlsCard QWidget {
+                min-height: 28px;
+            }
+            QFrame#geometryCard QPushButton,
+            QWidget#classStyleSidebar QPushButton {
+                min-height: 28px;
+            }
+        ''')
         self.show()
 
     def select_class(self, class_id):
@@ -439,6 +513,7 @@ class modificationCls(QMainWindow):
         self.handle_control.set_rgba(style['handle'])
         self.text_control.set_rgba(style['text'])
         self.border_width_spin.setValue(style['border_width'])
+        self.handle_size_spin.setValue(style['handle_size'])
         self.text_size_spin.setValue(style['text_size'])
         position_index = self.text_position_combo.findData(style['text_position'])
         self.text_position_combo.setCurrentIndex(max(0, position_index))
@@ -456,6 +531,7 @@ class modificationCls(QMainWindow):
             'border_width': self.border_width_spin.value(),
             'fill': self.fill_control.rgba(),
             'handle': self.handle_control.rgba(),
+            'handle_size': self.handle_size_spin.value(),
             'text': self.text_control.rgba(),
             'text_size': self.text_size_spin.value(),
             'text_position': self.text_position_combo.currentData(),
@@ -496,6 +572,7 @@ class modificationCls(QMainWindow):
             return
         shared_values = {
             'border_width': self.border_width_spin.value(),
+            'handle_size': self.handle_size_spin.value(),
             'text_size': self.text_size_spin.value(),
             'text_position': self.text_position_combo.currentData(),
         }
@@ -506,7 +583,7 @@ class modificationCls(QMainWindow):
         self._load_selected_style()
         self._notify_preview()
         self.hint.setText(
-            '已将边框粗细、文字大小和位置应用到全部类别；颜色保持独立。')
+            '已将边框粗细、锚点大小、文字大小和位置应用到全部类别；颜色保持独立。')
 
     def resetCurrentStyle(self):
         """Compatibility alias: reset now intentionally applies to all classes."""

@@ -1,7 +1,7 @@
 import unittest
 
 from utils.class_styles import (
-    DEFAULT_BORDER, DEFAULT_BORDER_WIDTH, DEFAULT_HANDLE,
+    DEFAULT_BORDER, DEFAULT_BORDER_WIDTH, DEFAULT_HANDLE, DEFAULT_HANDLE_SIZE,
     DEFAULT_TEXT_POSITION, DEFAULT_TEXT_SIZE, build_class_styles,
     default_class_color, default_class_style, display_border,
     normalize_class_style, normalize_rgba,
@@ -16,6 +16,7 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(style['fill'], (10, 20, 30, 45))
         self.assertEqual(style['border'], (10, 20, 30, DEFAULT_BORDER[3]))
         self.assertEqual(style['handle'], DEFAULT_HANDLE)
+        self.assertEqual(style['handle_size'], DEFAULT_HANDLE_SIZE)
         self.assertEqual(style['border_width'], DEFAULT_BORDER_WIDTH)
         self.assertEqual(style['text'], (10, 20, 30, 255))
         self.assertEqual(style['text_size'], DEFAULT_TEXT_SIZE)
@@ -26,6 +27,7 @@ class ClassStylesTest(unittest.TestCase):
             'border': [1, 2, 3, 180],
             'fill': [4, 5, 6, 70],
             'handle': [7, 8, 9, 160],
+            'handle_size': 14,
             'border_width': 5,
             'text': [10, 11, 12, 130],
             'text_size': 16,
@@ -35,6 +37,7 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(style['border'], (1, 2, 3, 180))
         self.assertEqual(style['fill'], (4, 5, 6, 70))
         self.assertEqual(style['handle'], (7, 8, 9, 160))
+        self.assertEqual(style['handle_size'], 14)
         self.assertEqual(style['border_width'], 5)
         self.assertEqual(style['text'], (10, 11, 12, 130))
         self.assertEqual(style['text_size'], 16)
@@ -57,6 +60,7 @@ class ClassStylesTest(unittest.TestCase):
                 'border_width': 6,
                 'fill': (5, 6, 7, 8),
                 'handle': (9, 10, 11, 12),
+                'handle_size': 16,
                 'text': (13, 14, 15, 16),
                 'text_size': 18,
                 'text_position': 'outside_bottom_left',
@@ -66,6 +70,7 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(serialized[3]['border'], [1, 2, 3, 4])
         self.assertEqual(serialized[3]['fill'], [5, 6, 7, 8])
         self.assertEqual(serialized[3]['handle'], [9, 10, 11, 12])
+        self.assertEqual(serialized[3]['handle_size'], 16)
         self.assertEqual(serialized[3]['border_width'], 6)
         self.assertEqual(serialized[3]['text'], [13, 14, 15, 16])
         self.assertEqual(serialized[3]['text_size'], 18)
@@ -74,11 +79,13 @@ class ClassStylesTest(unittest.TestCase):
     def test_invalid_dimensions_and_position_use_safe_values(self):
         style = normalize_class_style({
             'border_width': 99,
+            'handle_size': 99,
             'text_size': 'invalid',
             'text_position': 'somewhere',
         })
 
         self.assertEqual(style['border_width'], 12)
+        self.assertEqual(style['handle_size'], 20)
         self.assertEqual(style['text_size'], DEFAULT_TEXT_SIZE)
         self.assertEqual(style['text_position'], DEFAULT_TEXT_POSITION)
 
@@ -112,6 +119,7 @@ class ClassStylesTest(unittest.TestCase):
         self.assertEqual(style['border'], (*color, DEFAULT_BORDER[3]))
         self.assertEqual(style['fill'][:3], color)
         self.assertEqual(style['handle'], (*color, 255))
+        self.assertEqual(style['handle_size'], DEFAULT_HANDLE_SIZE)
         self.assertEqual(style['text'][:3], color)
         self.assertEqual(style['border_width'], DEFAULT_BORDER_WIDTH)
         self.assertEqual(style['text_size'], DEFAULT_TEXT_SIZE)
