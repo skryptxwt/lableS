@@ -11,6 +11,45 @@ from utils.tempCatewidget import CategoryApp as CategoryPopup
 
 
 class TaskSwitchingTest(unittest.TestCase):
+    def test_failed_label_import_keeps_image_queue(self):
+        queue_clears = []
+        warnings = []
+
+        def reject_label(_source, _destination):
+            raise ValueError('标签格式与当前任务不兼容')
+
+        window = SimpleNamespace(
+            is_open_folder=False,
+            is_open_file=True,
+            img_list_only_name={'sample'},
+            default_save_path=main_window_module.Path('labels'),
+            label_list=set(),
+            label_list_only_name=set(),
+            annotation_task='segment',
+            kpt_shape=(17, 3),
+            ui=SimpleNamespace(
+                thumbnailWidget=SimpleNamespace(
+                    clear=lambda: queue_clears.append(True))),
+            _merge_label_file=reject_label,
+        )
+
+        with patch.object(
+                main_window_module.QFileDialog, 'getOpenFileNames',
+                return_value=(['C:/labels/sample.txt'], '')), \
+             patch.object(
+                 main_window_module.os.path, 'isfile', return_value=True), \
+             patch.object(
+                 main_window_module.QMessageBox, 'warning',
+                 side_effect=lambda _parent, title, message:
+                 warnings.append((title, message))):
+            MainWin.readFolderLabel_(window)
+
+        self.assertEqual(queue_clears, [])
+        self.assertEqual(window.label_list, set())
+        self.assertEqual(window.label_list_only_name, set())
+        self.assertEqual(warnings, [
+            ('标签导入失败', '标签格式与当前任务不兼容')])
+
     def test_category_popup_close_detaches_shared_reference(self):
         closed = []
         popup = SimpleNamespace(close=lambda: closed.append(True))

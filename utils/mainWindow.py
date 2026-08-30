@@ -2757,7 +2757,6 @@ class MainWin(QMainWindow):
             folder = os.path.dirname(file_path[0]) if len(file_path) else None
             for file_path in file_path:
                 if os.path.isfile(file_path) and file_path.endswith('.txt'):
-                    self.ui.thumbnailWidget.clear()
                     txt_path += [file_path]
                     txt_path_ += [Path(file_path).stem]
             if not len(txt_path):
