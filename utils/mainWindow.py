@@ -1896,9 +1896,7 @@ class MainWin(QMainWindow):
             self.temp_widget.close()
         self.temp_widget = tempWidget(self, QListWidget())
         self.temp_widget.set_rect_cls(self.cls, index)
-        self.temp_widget.show()
-        self.temp_widget.move(global_position.x() + 12,
-                              global_position.y() + 12)
+        self.temp_widget.show_at(global_position)
         return True
 
     def _begin_task_edit(self, hit, position):

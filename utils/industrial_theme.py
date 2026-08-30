@@ -33,8 +33,77 @@ QLabel#windowTitleLabel {
 }
 
 QWidget#categoryPopup {
-    background: #f7f9fb;
-    border: 1px solid #aeb9c2;
+    color: #27353e;
+    background: rgba(247, 250, 252, 248);
+    border: 1px solid rgba(117, 137, 150, 185);
+    border-radius: 10px;
+}
+
+QWidget#categoryPopupHeader {
+    background: transparent;
+    border: 0;
+}
+
+QLabel#categoryPopupTitle {
+    color: #263640;
+    background: transparent;
+    border: 0;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#categoryPopupCurrent {
+    min-height: 22px;
+    color: #177da3;
+    background: rgba(210, 233, 242, 205);
+    border: 1px solid rgba(64, 153, 187, 105);
+    border-radius: 11px;
+    padding: 0 9px;
+    font-size: 10px;
+}
+
+QListWidget#categoryPopupList {
+    color: #2c3942;
+    background: rgba(255, 255, 255, 105);
+    border: 1px solid rgba(144, 160, 171, 105);
+    border-radius: 7px;
+    outline: 0;
+    padding: 5px;
+}
+
+QListWidget#categoryPopupList::item {
+    min-height: 30px;
+    color: #2c3942;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 2px 9px;
+}
+
+QListWidget#categoryPopupList::item:hover {
+    color: #1f2c35;
+    background: rgba(220, 231, 238, 205);
+}
+
+QListWidget#categoryPopupList::item:selected {
+    color: #ffffff;
+    background: #299bc5;
+    border: 0;
+}
+
+QListWidget#categoryPopupList QScrollBar:vertical {
+    width: 6px;
+    margin: 5px 2px;
+}
+
+QListWidget#categoryPopupList QScrollBar::handle:vertical {
+    min-height: 34px;
+    background: rgba(80, 102, 116, 105);
+    border-radius: 3px;
+}
+
+QListWidget#categoryPopupList QScrollBar::handle:vertical:hover {
+    background: rgba(37, 155, 200, 190);
 }
 
 QGroupBox {
