@@ -8,32 +8,37 @@ from PyQt5.QtWidgets import (QApplication, QComboBox, QListWidget, QSpinBox,
                              QWidget)
 
 from utils import mainWindow as main_window_module
+from utils.LabelApp import LabelApp
 from utils.mainWindow import MainWin
 from utils.tempCatewidget import CategoryApp as CategoryPopup
 
 
 class TaskSwitchingTest(unittest.TestCase):
-    def test_object_header_delete_is_enabled_only_for_valid_selection(self):
-        states = []
-        button = SimpleNamespace(
-            setEnabled=lambda enabled: states.append(bool(enabled)))
-        window = SimpleNamespace(
-            object_delete_button=button,
-            img_is_load=True,
-            img=SimpleNamespace(label_save=[[0, 1, 2, 3, 4]]),
-            is_choose_rect=True,
-            is_choose_rect_index=0,
-            _io_operation=None,
+    def test_selected_object_row_shows_its_own_delete_button(self):
+        app = QApplication.instance() or QApplication([])
+        deleted = []
+        list_widget = QListWidget()
+        main = SimpleNamespace(
+            ui=SimpleNamespace(labelShow=list_widget),
+            names={0: 'zero', 1: 'one'},
+            img=SimpleNamespace(label_save=[
+                [0, 1, 2, 3, 4], [1, 5, 6, 7, 8]]),
+            is_choose_rect=False,
+            is_choose_rect_index=None,
+            deleteBox_=lambda index=None: deleted.append(index),
         )
+        objects = LabelApp(main)
 
-        MainWin._sync_object_delete_button(window)
-        window.is_choose_rect_index = None
-        MainWin._sync_object_delete_button(window)
-        window.is_choose_rect_index = 0
-        window._io_operation = 'labels'
-        MainWin._sync_object_delete_button(window)
+        objects.set_rect_box(0)
 
-        self.assertEqual(states, [True, False, False])
+        self.assertFalse(objects._row_widgets[0].delete_button.isHidden())
+        self.assertTrue(objects._row_widgets[1].delete_button.isHidden())
+
+        objects.delete_row(1)
+
+        self.assertEqual(deleted, [1])
+        self.assertEqual(main.is_choose_rect_index, 1)
+        app.processEvents()
 
     def test_category_picker_is_an_in_window_overlay(self):
         app = QApplication.instance() or QApplication([])

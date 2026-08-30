@@ -165,32 +165,32 @@ QLabel[role="sectionTitle"] {
     padding: 0 12px;
 }
 
-QWidget#objectSectionHeader {
-    background: rgba(249, 251, 252, 125);
+QWidget#annotationObjectRow,
+QLabel#annotationObjectCaption {
+    background: transparent;
     border: 0;
-    border-bottom: 1px solid rgba(125, 141, 153, 115);
+    padding: 0;
+    color: #263640;
+    font-size: 11px;
 }
 
-QPushButton#objectDeleteButton {
-    color: #6d7a83;
+QPushButton#annotationRowDelete {
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
     background: transparent;
     border: 0;
     border-radius: 5px;
     padding: 0;
 }
 
-QPushButton#objectDeleteButton:hover {
-    color: #b44750;
+QPushButton#annotationRowDelete:hover {
     background: rgba(213, 82, 91, 38);
 }
 
-QPushButton#objectDeleteButton:pressed {
+QPushButton#annotationRowDelete:pressed {
     background: rgba(213, 82, 91, 70);
-}
-
-QPushButton#objectDeleteButton:disabled {
-    color: #a8b1b7;
-    background: transparent;
 }
 
 QLabel#styleControlTitle,

@@ -677,44 +677,7 @@ class MainWin(QMainWindow):
         object_layout = QVBoxLayout(self.object_section)
         object_layout.setContentsMargins(0, 0, 0, 0)
         object_layout.setSpacing(0)
-        self.object_header = QWidget(self.object_section)
-        self.object_header.setObjectName('objectSectionHeader')
-        self.object_header.setAttribute(Qt.WA_StyledBackground, True)
-        self.object_header.setFixedHeight(34)
-        self.object_header.setStyleSheet(
-            'QWidget#objectSectionHeader {'
-            ' background: rgba(249, 251, 252, 168); border: 0;'
-            ' border-bottom: 1px solid rgba(105, 127, 139, 165); }'
-            'QPushButton#objectDeleteButton {'
-            ' min-width: 50px; max-width: 50px;'
-            ' min-height: 24px; max-height: 24px;'
-            ' color: #6d7a83; background: transparent; border: 0;'
-            ' border-radius: 5px; padding: 0 5px; font-size: 11px; }'
-            'QPushButton#objectDeleteButton:hover {'
-            ' color: #b44750; background: rgba(213, 82, 91, 38); }'
-            'QPushButton#objectDeleteButton:pressed {'
-            ' background: rgba(213, 82, 91, 70); }'
-            'QPushButton#objectDeleteButton:disabled {'
-            ' color: #a8b1b7; background: transparent; border: 0; }')
-        object_header_layout = QHBoxLayout(self.object_header)
-        object_header_layout.setContentsMargins(0, 0, 6, 0)
-        object_header_layout.setSpacing(2)
-        self.ui.label_3.setStyleSheet(
-            'color: #263640; background: transparent; border: 0; '
-            'padding: 0 12px; font-size: 12px; font-weight: 600;')
-        self.object_delete_button = QPushButton('删除', self.object_header)
-        self.object_delete_button.setObjectName('objectDeleteButton')
-        self.object_delete_button.setFixedSize(50, 24)
-        self.object_delete_button.setIcon(
-            toolbar_icon('delete', color='#71808a'))
-        self.object_delete_button.setIconSize(QSize(12, 12))
-        self.object_delete_button.setToolTip('删除当前选中的标注对象')
-        self.object_delete_button.setEnabled(False)
-        self.object_delete_button.clicked.connect(self.deleteBox_)
-        object_header_layout.addWidget(self.ui.label_3, 1)
-        object_header_layout.addWidget(
-            self.object_delete_button, 0, Qt.AlignVCenter)
-        object_layout.addWidget(self.object_header)
+        object_layout.addWidget(self.ui.label_3)
         object_layout.addWidget(self.ui.labelShow, 1)
 
         self.class_section = BackgroundGlassPanel(
@@ -732,7 +695,6 @@ class MainWin(QMainWindow):
         self.right_splitter.setStretchFactor(0, 1)
         self.right_splitter.setStretchFactor(1, 1)
         self.right_splitter.setSizes([420, 360])
-        self._sync_object_delete_button()
 
         self.queue_section = BackgroundGlassPanel(
             self.window_shell, self.ui.centralwidget)
@@ -2988,7 +2950,6 @@ class MainWin(QMainWindow):
                 self.readFolderLabel, self.save_label,
                 self.task_button):
             control.setEnabled(bool(enabled))
-        self._sync_object_delete_button()
 
     def _begin_io_operation(self, worker, operation, message):
         if self._io_operation is not None:
@@ -3235,30 +3196,20 @@ class MainWin(QMainWindow):
             self.img.show()
             self.img.label_show()
 
-    def _sync_object_delete_button(self):
-        button = getattr(self, 'object_delete_button', None)
-        if button is None:
-            return
-        image = getattr(self, 'img', None)
-        index = getattr(self, 'is_choose_rect_index', None)
-        enabled = (
-            getattr(self, 'img_is_load', False)
-            and image is not None
-            and getattr(self, 'is_choose_rect', False)
-            and isinstance(index, int) and not isinstance(index, bool)
-            and 0 <= index < len(image.label_save)
-            and getattr(self, '_io_operation', None) != 'labels'
-        )
-        button.setEnabled(enabled)
-
-    def deleteBox_(self, index=False):
+    def deleteBox_(self, index=None):
         if self._io_operation == 'labels':
             self.statusBar().showMessage(
                 'LABEL IMPORT  |  标签正在合并，暂不能删除标注', 3000)
-            self._sync_object_delete_button()
             return
         if self.is_choose_rect and self.is_choose_rect_index is not None:
-            self.img.pop(index if index else self.is_choose_rect_index)
+            if isinstance(index, bool):
+                index = None
+            target = self.is_choose_rect_index if index is None else int(index)
+            if target == -1:
+                target = len(self.img.label_save) - 1
+            if not 0 <= target < len(self.img.label_save):
+                return
+            self.img.pop(target)
             self.is_choose_rect_index = None
             self.is_choose_rect = False
             self.hover = False
@@ -3269,11 +3220,10 @@ class MainWin(QMainWindow):
             self.is_add_box = False
             self.categoryShowWidget.clear()
             self.boxShowWidget.clear()
-            self.len_rect -= 1
+            self.len_rect = len(self.img.label_save)
 
             self.move_xy()
             self._save_annotations('DELETE')
-        self._sync_object_delete_button()
 
     # ———————————————————————————————— 快捷键 ————————————————————————————————#
     def handleShortcut1_(self):
