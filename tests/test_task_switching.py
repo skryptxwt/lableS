@@ -349,6 +349,34 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual([entry[:2] for entry in opened], [
             ('segment', 2), ('obb', 2), ('pose', 2), ('detect', 2)])
 
+    def test_interaction_redraw_coalesces_to_latest_pointer_frame(self):
+        class FakeTimer:
+            def __init__(self):
+                self.active = False
+                self.starts = 0
+
+            def isActive(self):
+                return self.active
+
+            def start(self):
+                self.active = True
+                self.starts += 1
+
+        timer = FakeTimer()
+        window = SimpleNamespace(
+            _pending_interaction_redraw=None,
+            _interaction_redraw_timer=timer,
+        )
+
+        MainWin._queue_interaction_redraw(
+            window, 'task_drag', cursor=(10, 20))
+        MainWin._queue_interaction_redraw(
+            window, 'task_drag', cursor=(80, 90))
+
+        self.assertEqual(timer.starts, 1)
+        self.assertEqual(window._pending_interaction_redraw, (
+            'task_drag', {'cursor': (80, 90)}))
+
 
 if __name__ == '__main__':
     unittest.main()

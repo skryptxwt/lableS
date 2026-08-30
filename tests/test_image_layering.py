@@ -104,6 +104,26 @@ class ImageLayeringTest(unittest.TestCase):
 
         self.assertEqual(moved, [0, 30, 40, 130, 100])
 
+    def test_detection_data_can_update_without_immediate_canvas_redraw(self):
+        image = SimpleNamespace(
+            task='detect',
+            mod=0,
+            org_width=200,
+            org_height=120,
+            label_save=[[0, 10, 20, 110, 80]],
+            basedata=[[0, .3, .4, .5, .5]],
+            show=lambda *_args, **_kwargs: self.fail(
+                'coalesced update must not redraw immediately'),
+            label_show=lambda *_args, **_kwargs: self.fail(
+                'coalesced update must not redraw immediately'),
+        )
+        image._clamp_label = lambda label: Image._clamp_label(image, label)
+
+        Image.change(image, 0, [0, 30, 40, 130, 100], redraw=False)
+
+        self.assertEqual(image.label_save[0], [0, 30.0, 40.0, 130.0, 100.0])
+        self.assertEqual(image.basedata[0], [0, .4, 7 / 12, .5, .5])
+
     def test_explicit_list_selection_is_prioritized(self):
         image = FakeImage([
             [0, 10, 10, 120, 120],

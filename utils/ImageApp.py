@@ -169,6 +169,13 @@ class Image(QMainWindow):
             self.is_trans = False
         self.screen_label.setPixmap(self.temp_img)
 
+    def overlay_frame(self):
+        """Return one writable base frame for a complete annotation pass."""
+        if self.is_trans or self.temp_img is None:
+            self.show(*self.center, scale=self.wheel_scale)
+        # Keep the clone implicit; QPainter detaches it only when drawing.
+        return QPixmap(self.temp_img)
+
     def add_rect(self, x1y1, x2y2, text, fill_color, border_color,
                  point_color, box_thickness=3, circle_radius=1,
                  text_size=8, is_show_nine_circle=True, is_over_striking=False,
@@ -335,9 +342,9 @@ class Image(QMainWindow):
                 converted.append(int(values[offset + 2]))
         return converted
 
-    def label_show(self, index=None):
+    def label_show(self, index=None, pixmap=None, commit=True):
         if self.task != 'detect':
-            self._label_show_task(index)
+            self._label_show_task(index, pixmap=pixmap, commit=commit)
             return
         if self.only_index and index is not None and self.show_other:
             selected_index = self._normalized_index(index, len(self.label_save))
@@ -361,13 +368,24 @@ class Image(QMainWindow):
             #               box_color, (255, 0, 0, 200), (255, 0, 0, 200), 2,
             #               circle_radius=8, is_over_striking=True)
 
-            self.add_rect((x1, y1), (x2, y2), box_cls,
-                          style['fill'], style['border'],
-                          style['handle'], style['border_width'],
-                          circle_radius=style['handle_size'],
-                          text_size=style['text_size'],
-                          is_over_striking=True, text_color=style['text'],
-                          text_position=style['text_position'])
+            target = pixmap or self.screen_label.pixmap()
+            if target is None:
+                return
+            painter = QPainter(target)
+            self._enable_quality_rendering(painter)
+            try:
+                self.add_rect(
+                    (x1, y1), (x2, y2), box_cls,
+                    style['fill'], style['border'],
+                    style['handle'], style['border_width'],
+                    circle_radius=style['handle_size'],
+                    text_size=style['text_size'],
+                    is_over_striking=True, text_color=style['text'],
+                    text_position=style['text_position'], painter=painter)
+            finally:
+                painter.end()
+            if commit:
+                self.screen_label.setPixmap(target)
             return
 
         if self.mod == 0:
@@ -378,13 +396,13 @@ class Image(QMainWindow):
             parent_colors = self.parent.colors if self.parent else None
             parent_styles = self.parent.class_styles if self.parent else None
             selected_index = self._normalized_index(index, label_count)
-            pixmap = self.screen_label.pixmap()
-            if pixmap is None or not label_count:
+            target = pixmap or self.screen_label.pixmap()
+            if target is None or not label_count:
                 return
 
             # 一帧只创建一个 QPainter、只向 QLabel 提交一次。原实现每个框
             # 都 setPixmap，一旦框较多或大量重叠，MouseMove 会迅速堆积。
-            painter = QPainter(pixmap)
+            painter = QPainter(target)
             self._enable_quality_rendering(painter)
             try:
                 for label_index in self._paint_order(
@@ -411,7 +429,8 @@ class Image(QMainWindow):
                         text_position=style['text_position'], painter=painter)
             finally:
                 painter.end()
-            self.screen_label.setPixmap(pixmap)
+            if commit:
+                self.screen_label.setPixmap(target)
 
     def _class_style(self, class_id):
         class_id = int(class_id)
@@ -428,17 +447,17 @@ class Image(QMainWindow):
             return self.parent.names[class_id]
         return str(class_id)
 
-    def _label_show_task(self, index=None):
+    def _label_show_task(self, index=None, pixmap=None, commit=True):
         label_count = len(self.label_save)
         selected_index = self._normalized_index(index, label_count)
         if self.only_index and self.show_other and selected_index is not None:
             order = [selected_index]
         else:
             order = self._paint_order(label_count, selected_index)
-        pixmap = self.screen_label.pixmap()
-        if pixmap is None or not order:
+        target = pixmap or self.screen_label.pixmap()
+        if target is None or not order:
             return
-        painter = QPainter(pixmap)
+        painter = QPainter(target)
         self._enable_quality_rendering(painter)
         try:
             for label_index in order:
@@ -457,7 +476,8 @@ class Image(QMainWindow):
                     self._paint_pose(painter, label, style, selected)
         finally:
             painter.end()
-        self.screen_label.setPixmap(pixmap)
+        if commit:
+            self.screen_label.setPixmap(target)
 
     def _paint_polygon(self, painter, points, text, style, selected=False,
                        rotated=False):
@@ -960,7 +980,7 @@ class Image(QMainWindow):
         self.show(scale=self.wheel_scale)
         self.label_show()
 
-    def append(self, label):
+    def append(self, label, redraw=True):
         # 添加标签
         if self.mod == 0:
             #  label为相对qt label的坐标
@@ -975,10 +995,11 @@ class Image(QMainWindow):
             x, y, w, h = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
             x, y, w, h = x / self.org_width, y / self.org_height, w / self.org_width, h / self.org_height
             self.basedata.append([cls, x, y, w, h])
-            self.show(*self.center, scale=self.wheel_scale)
-            # 新框拖动期间开启了 only_index，只绘制当前框即可，避免首帧
-            # 把所有旧框重复绘制一遍。
-            self.label_show(len(self.label_save) - 1)
+            if redraw:
+                self.show(*self.center, scale=self.wheel_scale)
+                # 新框拖动期间开启了 only_index，只绘制当前框即可，避免首帧
+                # 把所有旧框重复绘制一遍。
+                self.label_show(len(self.label_save) - 1)
 
     def insert(self, index, label):
         # 添加标签
@@ -999,10 +1020,10 @@ class Image(QMainWindow):
             self.show(*self.center, scale=self.wheel_scale)
             self.label_show()
 
-    def change(self, index, label):
+    def change(self, index, label, redraw=True):
         # 修改标签
         if self.task != 'detect':
-            self.change_annotation(index, label)
+            self.change_annotation(index, label, redraw=redraw)
             return
         if self.mod == 0:
             label = self._clamp_label(label)
@@ -1012,8 +1033,9 @@ class Image(QMainWindow):
             x, y, w, h = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
             x, y, w, h = x / self.org_width, y / self.org_height, w / self.org_width, h / self.org_height
             self.basedata[index] = [cls, x, y, w, h]
-            self.show(*self.center, scale=self.wheel_scale)
-            self.label_show(index)
+            if redraw:
+                self.show(*self.center, scale=self.wheel_scale)
+                self.label_show(index)
 
     def _clamp_label(self, label):
         cls, x1, y1, x2, y2 = label
@@ -1072,20 +1094,22 @@ class Image(QMainWindow):
         self.label_show(len(self.label_save) - 1)
         return len(self.label_save) - 1
 
-    def change_annotation(self, index, label):
+    def change_annotation(self, index, label, redraw=True):
         normalized = self._normalize_annotation(label)
         self.basedata[index] = normalized
         self.label_save[index] = self._annotation_from_normalized(normalized)
-        self.show(*self.center, scale=self.wheel_scale)
-        self.label_show(index)
+        if redraw:
+            self.show(*self.center, scale=self.wheel_scale)
+            self.label_show(index)
 
     def draw_task_draft(self, points=None, cursor=None, bbox=None,
-                        pose_points=None, close_polygon=False):
+                        pose_points=None, close_polygon=False, pixmap=None,
+                        commit=True):
         """Draw an unsaved task annotation over the current canvas frame."""
-        pixmap = self.screen_label.pixmap()
-        if pixmap is None:
+        target = pixmap or self.screen_label.pixmap()
+        if target is None:
             return
-        painter = QPainter(pixmap)
+        painter = QPainter(target)
         self._enable_quality_rendering(painter)
         style = self._class_style(self.parent.cls if self.parent else 0)
         border, width = display_border(style['border'], 2, True)
@@ -1124,7 +1148,8 @@ class Image(QMainWindow):
                 canvas_point = QPointF(*self.org_xy_to_new_xy(point))
                 painter.drawEllipse(canvas_point, handle_radius, handle_radius)
         painter.end()
-        self.screen_label.setPixmap(pixmap)
+        if commit:
+            self.screen_label.setPixmap(target)
 
     def save(self):
         self.basedata.save()

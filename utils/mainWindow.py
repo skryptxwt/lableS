@@ -257,6 +257,14 @@ class MainWin(QMainWindow):
         self._obb_save_timer.setSingleShot(True)
         self._obb_save_timer.setInterval(240)
         self._obb_save_timer.timeout.connect(self._save_obb_wheel_change)
+        # 高频 MouseMove 只保留最新一帧，避免整张画布重绘请求排队。
+        # 8 ms 上限约为 120 FPS，既能保持跟手，也给事件循环留出时间。
+        self._interaction_redraw_timer = QTimer(self)
+        self._interaction_redraw_timer.setSingleShot(True)
+        self._interaction_redraw_timer.setInterval(8)
+        self._interaction_redraw_timer.timeout.connect(
+            self._flush_interaction_redraw)
+        self._pending_interaction_redraw = None
 
         # ———————————————————————————————— 初始化 ————————————————————————————————#
         self._apply_industrial_ui()
@@ -894,6 +902,9 @@ class MainWin(QMainWindow):
     def _reset_task_interaction(self):
         if hasattr(self, '_obb_save_timer'):
             self._obb_save_timer.stop()
+        if hasattr(self, '_interaction_redraw_timer'):
+            self._interaction_redraw_timer.stop()
+        self._pending_interaction_redraw = None
         self.task_draft_points = []
         self.task_pose_bbox = None
         self.task_pose_points = []
@@ -1527,11 +1538,11 @@ class MainWin(QMainWindow):
 
             # 更新label
             if self.is_update_label:
-                self.updDatalabel()
+                self._queue_interaction_redraw('detect_update')
 
             # 添加框
             elif self.is_add_box:
-                self.addBox()
+                self._queue_interaction_redraw('detect_add')
 
         # ———————————————————————————————— 鼠标事件 ————————————————————————————————#
 
@@ -1606,6 +1617,8 @@ class MainWin(QMainWindow):
                     return False
 
                 if self.img_is_load:
+                    self._interaction_redraw_timer.stop()
+                    self._flush_interaction_redraw()
                     self.img.save()
 
                 # is_first_add_box 为 False 才表示本次拖动真的创建了新框。
@@ -1702,6 +1715,7 @@ class MainWin(QMainWindow):
                 return True
 
         if event.type() == QEvent.MouseButtonPress:
+            self._cancel_interaction_redraw()
             if event.button() == Qt.RightButton:
                 if self.annotation_task == 'segment' and self.task_draft_points:
                     self._cancel_segment_draft()
@@ -1763,11 +1777,14 @@ class MainWin(QMainWindow):
                 can_close = self._segment_can_close(position)
                 self.setCursor(Qt.PointingHandCursor if can_close
                                else Qt.CrossCursor)
-                self._redraw_task_draft(
-                    cursor=position, close_polygon=can_close)
+                self._queue_interaction_redraw(
+                    'task_draft', cursor=position,
+                    close_polygon=can_close)
                 return True
             if self.task_edit is not None and self.mouse_left_press:
-                self._update_task_edit(position, event.modifiers())
+                self._queue_interaction_redraw(
+                    'task_edit', index=self.task_edit['index'],
+                    position=tuple(position), modifiers=event.modifiers())
                 return True
             if self.task_drag is not None and self.mouse_left_press:
                 end = tuple(self.limit_xy(*position))
@@ -1779,7 +1796,7 @@ class MainWin(QMainWindow):
                         self.task_drag['start'], end)
                 self.task_drag['current'] = end
                 self.task_drag['square'] = square
-                self._redraw_task_drag()
+                self._queue_interaction_redraw('task_drag')
                 return True
             hit = self.img.task_hit_test(*position)
             edge_hit = None
@@ -1799,6 +1816,8 @@ class MainWin(QMainWindow):
             return True
 
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            self._interaction_redraw_timer.stop()
+            self._flush_interaction_redraw()
             if self.task_edit is not None:
                 self.img.save()
                 self.task_edit = None
@@ -1877,7 +1896,8 @@ class MainWin(QMainWindow):
         }
         self.mouse_left_press = True
 
-    def _update_task_edit(self, position, modifiers=Qt.NoModifier):
+    def _update_task_edit(self, position, modifiers=Qt.NoModifier,
+                          redraw=True):
         edit = self.task_edit
         label = list(edit['original'])
         current_org = self.img.new_xy_to_org_xy(position)
@@ -1974,7 +1994,10 @@ class MainWin(QMainWindow):
             angle = current_angle - start_angle
             label = self.img.rotate_obb_label(
                 label, math.degrees(angle))
-        self.img.change_annotation(edit['index'], label)
+        if redraw:
+            self.img.change_annotation(edit['index'], label)
+        else:
+            self.img.change_annotation(edit['index'], label, redraw=False)
         self.rect_save_current = [edit['index'], -1,
                                   self.img.label_save[edit['index']]]
 
@@ -2134,30 +2157,81 @@ class MainWin(QMainWindow):
                 '|  Shift+左键=遮挡，右键=缺失')
 
     def _redraw_task_drag(self):
-        self.img.show(*self.img.center, scale=self.wheel_scale)
-        self.img.label_show(self.is_choose_rect_index)
+        frame = self.img.overlay_frame()
+        self.img.label_show(
+            self.is_choose_rect_index, pixmap=frame, commit=False)
         start = self.img.new_xy_to_org_xy(self.task_drag['start'])
         end = self.img.new_xy_to_org_xy(self.task_drag['current'])
         x1, x2 = sorted((start[0], end[0]))
         y1, y2 = sorted((start[1], end[1]))
         if self.annotation_task == 'obb':
             self.img.draw_task_draft(
-                points=[(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+                points=[(x1, y1), (x2, y1), (x2, y2), (x1, y2)],
+                pixmap=frame, commit=False)
         else:
-            self.img.draw_task_draft(bbox=[x1, y1, x2, y2])
+            self.img.draw_task_draft(
+                bbox=[x1, y1, x2, y2], pixmap=frame, commit=False)
+        self.label.setPixmap(frame)
+
+    def _queue_interaction_redraw(self, kind, **payload):
+        """Coalesce high-frequency pointer updates into the newest frame."""
+        self._pending_interaction_redraw = (kind, payload)
+        if not self._interaction_redraw_timer.isActive():
+            self._interaction_redraw_timer.start()
+
+    def _cancel_interaction_redraw(self):
+        self._interaction_redraw_timer.stop()
+        self._pending_interaction_redraw = None
+
+    def _flush_interaction_redraw(self):
+        pending = self._pending_interaction_redraw
+        self._pending_interaction_redraw = None
+        if pending is None or not self.img_is_load:
+            return
+        kind, payload = pending
+        if kind in ('detect_add', 'detect_update'):
+            if kind == 'detect_add':
+                self.addBox(redraw=False)
+            else:
+                self.updDatalabel(redraw=False)
+            index = self.is_choose_rect_index
+            if index is None:
+                return
+            frame = self.img.overlay_frame()
+            self.img.label_show(index, pixmap=frame, commit=False)
+            self.label.setPixmap(frame)
+        elif kind == 'task_edit':
+            if self.task_edit is None:
+                return
+            self._update_task_edit(
+                payload['position'], payload['modifiers'], redraw=False)
+            index = payload.get('index', self.is_choose_rect_index)
+            frame = self.img.overlay_frame()
+            self.img.label_show(index, pixmap=frame, commit=False)
+            self.label.setPixmap(frame)
+        elif kind == 'task_drag':
+            if self.task_drag is not None:
+                self._redraw_task_drag()
+        elif kind == 'task_draft':
+            self._redraw_task_draft(
+                cursor=payload.get('cursor'),
+                close_polygon=payload.get('close_polygon', False))
 
     def _redraw_task_draft(self, cursor=None, close_polygon=False):
         if not self.img_is_load:
             return
-        self.img.show(*self.img.center, scale=self.wheel_scale)
-        self.img.label_show(self.is_choose_rect_index)
+        frame = self.img.overlay_frame()
+        self.img.label_show(
+            self.is_choose_rect_index, pixmap=frame, commit=False)
         self.img.draw_task_draft(
             points=self.task_draft_points,
             cursor=cursor,
             close_polygon=close_polygon,
             bbox=self.task_pose_bbox,
             pose_points=[point[:2] for point in self.task_pose_points
-                         if len(point) < 3 or point[2] != 0])
+                         if len(point) < 3 or point[2] != 0],
+            pixmap=frame, commit=False)
+        self.label.setPixmap(frame)
 
     # ———————————————————————————————— 键盘事件 ————————————————————————————————#
 
@@ -2189,6 +2263,7 @@ class MainWin(QMainWindow):
                     event.accept()
                     return
             if event.key() == Qt.Key_Escape:
+                self._cancel_interaction_redraw()
                 self.task_draft_points = []
                 self.task_pose_bbox = None
                 self.task_pose_points = []
@@ -2396,14 +2471,18 @@ class MainWin(QMainWindow):
 
         return mapping[index]()
 
-    def add_box(self):
+    def add_box(self, redraw=True):
         if self.is_first_add_box and self.pos_in_org(self.mouse_press_pos):
             self.is_first_add_box = False
 
             # Image.append 接收的是画布坐标并负责转换；这里不能先转换一次，
             # 否则首帧会被重复换算，随后又被 change 突然纠正。
-            self.img.append([self.cls, *self.mouse_press_pos,
-                             *self.mouse_press_pos])
+            new_box = [self.cls, *self.mouse_press_pos,
+                       *self.mouse_press_pos]
+            if redraw:
+                self.img.append(new_box)
+            else:
+                self.img.append(new_box, redraw=False)
             self.len_rect += 1
             self.is_choose_rect = True
             self.is_choose_rect_index = self.len_rect - 1
@@ -2429,7 +2508,10 @@ class MainWin(QMainWindow):
             self.cls = self.img.label_save[-1][0]
             new_label = [self.cls, x1, y1, x2, y2]
 
-            self.img.change(-1, new_label)
+            if redraw:
+                self.img.change(-1, new_label)
+            else:
+                self.img.change(-1, new_label, redraw=False)
             self.rect_save_current = [self.len_rect - 1, -1, self.img.basedata[-1]]
             self.is_choose_rect_index = self.len_rect - 1
 
@@ -2850,7 +2932,7 @@ class MainWin(QMainWindow):
         self.is_choose_rect_index = None
         self.is_choose_rect = False
 
-    def updDatalabel(self, index=None):
+    def updDatalabel(self, index=None, redraw=True):
         # TODO: 优化
         new_label = self.computer_new_label()
 
@@ -2864,14 +2946,18 @@ class MainWin(QMainWindow):
         self.rect_save_current[-1] = new_label  # 框索引, label
         self.rect_save = self.rect_save_current
 
-        self.img.change(self.rect_save_current[0], new_label)
+        if redraw:
+            self.img.change(self.rect_save_current[0], new_label)
+        else:
+            self.img.change(
+                self.rect_save_current[0], new_label, redraw=False)
 
         self.is_choose_rect = True
         self.is_choose_rect_index = self.rect_save_current[0]
 
-    def addBox(self):
+    def addBox(self, redraw=True):
         if self.pos_in_org(self.mouse_pos):
-            self.add_box()
+            self.add_box(redraw=redraw)
             self.rect_save_current = [len(self.img.label_save) - 1, -1, self.img.label_save[-1]]
             self.is_choose_rect = True
             self.is_choose_rect_index = len(self.img.label_save) - 1
