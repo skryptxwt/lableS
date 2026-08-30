@@ -191,6 +191,8 @@ class MainWin(QMainWindow):
         self.task_pose_points = []
         self.task_drag = None
         self.task_edit = None
+        self.detect_drag_original = None
+        self.detect_drag_start_org = None
 
         self.is_update_label = False  # 是否正在更新框的label
         self.is_update_label_save = None  # 保存更新框的label的信息 [box_index, img.label_save[index], img.basedata[index]]
@@ -840,9 +842,9 @@ class MainWin(QMainWindow):
             if self.init_image(previous_image, previous_label):
                 self.boxShowWidget.set_rect_box()
         hints = {
-            'detect': '拖动绘制检测框',
+            'detect': '拖动绘制检测框；拖动框内部可整体移动',
             'segment': '逐点单击绘制多边形，双击或 Enter 闭合，Backspace 撤销点',
-            'obb': '拖动绘制旋转框；选中后拖动上方圆点旋转',
+            'obb': '拖动绘制旋转框；边中点调单边，上方圆点或滚轮旋转',
             'pose': f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；右键记为缺失',
         }
         self.statusBar().showMessage(
@@ -855,6 +857,8 @@ class MainWin(QMainWindow):
         self.task_pose_points = []
         self.task_drag = None
         self.task_edit = None
+        self.detect_drag_original = None
+        self.detect_drag_start_org = None
         self.is_add_box = False
         self.is_update_label = False
         self.is_choose_rect = False
@@ -1308,6 +1312,8 @@ class MainWin(QMainWindow):
         if hasattr(self, 'tool_mode_group'):
             self._sync_tool_mode_buttons()
         self.mouse_press_pos, self.mouse_left_press, self.mouse_right_press = None, False, False
+        self.detect_drag_original = None
+        self.detect_drag_start_org = None
 
         self.label_list.clear()
         self.label_list_only_name.clear()
@@ -1485,14 +1491,22 @@ class MainWin(QMainWindow):
                         # 按下鼠标左键时，更新label
                         self.is_add_box = False
                         self.is_update_label = True
+                        self.detect_drag_original = None
+                        self.detect_drag_start_org = None
 
                     elif self.arrows and self.hover:
-                        # Select immediately on press.  This makes a single
-                        # click reliable even when no MouseMove was delivered.
+                        # 框内部既负责选中，也直接用于整体拖动；不再依赖中心锚点。
                         self.img.only_index = True
                         self.is_add_box = False
-                        self.is_update_label = False
-                        self.is_choose_rect_index = self.rect_save_current[0]
+                        self.is_update_label = True
+                        index = self.rect_save_current[0]
+                        self.detect_drag_original = list(
+                            self.img.label_save[index])
+                        self.detect_drag_start_org = (
+                            self.img.new_xy_to_org_xy(self.mouse_press_pos))
+                        self.rect_save_current = [
+                            index, -1, list(self.detect_drag_original)]
+                        self.is_choose_rect_index = index
                         self.is_choose_rect = True
                         self.move_xy(index=self.is_choose_rect_index)
 
@@ -1579,6 +1593,8 @@ class MainWin(QMainWindow):
                 self.mouse_left_press = False
                 self.mouse_save_temp = None
                 self.hand_flag = False
+                self.detect_drag_original = None
+                self.detect_drag_start_org = None
 
                 self.rect_save = None
                 self.is_first_add_box = True
@@ -1691,7 +1707,7 @@ class MainWin(QMainWindow):
             self.setCursor(
                 Qt.SizeAllCursor if hit[0] == 'shape'
                 else Qt.CrossCursor if hit[0] in (
-                    'vertex', 'bbox_vertex', 'keypoint', 'rotate')
+                    'vertex', 'edge', 'bbox_vertex', 'keypoint', 'rotate')
                 else Qt.ArrowCursor)
             return True
 
@@ -1824,6 +1840,9 @@ class MainWin(QMainWindow):
                 label[1], label[4] = current_org
             label[1], label[3] = sorted((label[1], label[3]))
             label[2], label[4] = sorted((label[2], label[4]))
+        elif kind == 'edge':
+            label = self.img.resize_obb_edge(
+                label, edit['control'], current_org)
         elif kind == 'keypoint':
             dimensions = self.kpt_shape[1]
             offset = 5 + edit['control'] * dimensions
@@ -2136,9 +2155,18 @@ class MainWin(QMainWindow):
         return 0 < x < self.img.org_width and 0 < y < self.img.org_height
 
     def computer_new_label(self):
-        new_label = self.rect_save_current[2]
         pos = self.img.new_xy_to_org_xy(self.mouse_pos)
         circle_index = self.rect_save_current[1]
+        if (circle_index == -1
+                and self.detect_drag_original is not None
+                and self.detect_drag_start_org is not None):
+            dx = pos[0] - self.detect_drag_start_org[0]
+            dy = pos[1] - self.detect_drag_start_org[1]
+            return self.img.translate_detect_label(
+                self.detect_drag_original, dx, dy,
+                self.img.org_width, self.img.org_height)
+
+        new_label = self.rect_save_current[2]
 
         self.computer_new_label_assist(new_label, circle_index, pos)
 
@@ -2162,14 +2190,7 @@ class MainWin(QMainWindow):
             5: lambda: new_label.__setitem__(4, pos[1]),
             6: lambda: new_label.__setitem__(3, pos[0]),
             7: lambda: new_label.__setitem__(2, pos[1]),
-            8: lambda: handle_case_8(pos)
         }
-
-        def handle_case_8(pos):
-            x_, y_ = (new_label[1] + new_label[3]) / 2, (new_label[2] + new_label[4]) / 2
-            bias_x, bias_y = int(pos[0] - x_), int(pos[1] - y_)
-            new_label[1:5] = [new_label[1] + bias_x, new_label[2] + bias_y, new_label[3] + bias_x,
-                              new_label[4] + bias_y]
 
         return mapping[index]()
 

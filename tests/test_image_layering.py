@@ -57,6 +57,37 @@ class ImageLayeringTest(unittest.TestCase):
         image = FakeImage([[0, 50, 50, 160, 160]])
         self.assertEqual(image.hit_test(50, 80), ('rect', 0, -1))
 
+    def test_detection_center_is_not_a_resize_handle(self):
+        image = FakeImage([[0, 10, 10, 110, 110]])
+
+        self.assertEqual(len(Image.circle_nine(10, 10, 110, 110)), 8)
+        self.assertEqual(image.hit_test(60, 60), ('rect', 0, -1))
+
+    def test_detection_box_translation_preserves_size_at_boundary(self):
+        moved = Image.translate_detect_label(
+            [0, 10, 20, 110, 80], 100, -50, 150, 100)
+
+        self.assertEqual(moved, [0, 50, 0, 150, 60])
+
+    def test_detection_interior_drag_uses_press_offset(self):
+        image = SimpleNamespace(
+            org_width=200,
+            org_height=120,
+            new_xy_to_org_xy=lambda point: point,
+            translate_detect_label=Image.translate_detect_label,
+        )
+        window = SimpleNamespace(
+            img=image,
+            mouse_pos=(80, 70),
+            rect_save_current=[0, -1, [0, 10, 20, 110, 80]],
+            detect_drag_original=[0, 10, 20, 110, 80],
+            detect_drag_start_org=(60, 50),
+        )
+
+        moved = MainWin.computer_new_label(window)
+
+        self.assertEqual(moved, [0, 30, 40, 130, 100])
+
     def test_explicit_list_selection_is_prioritized(self):
         image = FakeImage([
             [0, 10, 10, 120, 120],
@@ -79,6 +110,41 @@ class ImageLayeringTest(unittest.TestCase):
 
         self.assertAlmostEqual(handle.x(), 60)
         self.assertLess(handle.y(), 20)
+
+    def test_obb_has_four_edge_midpoint_handles(self):
+        points = [QPointF(10, 20), QPointF(110, 20),
+                  QPointF(110, 80), QPointF(10, 80)]
+
+        handles = Image.obb_edge_handles(points)
+
+        self.assertEqual(len(handles), 4)
+        self.assertEqual([(point.x(), point.y()) for point in handles], [
+            (60.0, 20.0), (110.0, 50.0),
+            (60.0, 80.0), (10.0, 50.0),
+        ])
+
+    def test_obb_edge_handle_resizes_only_its_axis(self):
+        label = [0, 10, 20, 110, 20, 110, 80, 10, 80]
+
+        resized = Image.resize_obb_edge(label, 0, (60, 0))
+
+        self.assertObbIsRectangle(resized)
+        self.assertEqual(resized, [
+            0, 10.0, 0.0, 110.0, 0.0,
+            110.0, 80.0, 10.0, 80.0,
+        ])
+
+    def test_obb_edge_midpoint_is_hit_before_shape(self):
+        image = SimpleNamespace(
+            task='obb',
+            label_save=[[0, 10, 20, 110, 20, 110, 80, 10, 80]],
+            org_xy_to_new_xy=lambda point: point,
+            obb_rotation_handle=Image.obb_rotation_handle,
+            obb_edge_handles=Image.obb_edge_handles,
+        )
+
+        self.assertEqual(
+            Image.task_hit_test(image, 110, 50), ('edge', 0, 1))
 
     def test_rotate_obb_preserves_center_and_edge_lengths(self):
         label = [0, 10, 20, 110, 20, 110, 80, 10, 80]

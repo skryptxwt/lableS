@@ -445,6 +445,10 @@ class Image(QMainWindow):
                 painter.drawRoundedRect(
                     QRect(int(point.x()) - 4, int(point.y()) - 4, 8, 8), 2, 2)
             if rotated and len(points) == 4:
+                for edge in self.obb_edge_handles(points):
+                    painter.drawRoundedRect(
+                        QRect(int(edge.x()) - 4, int(edge.y()) - 3, 8, 6),
+                        2, 2)
                 handle = self.obb_rotation_handle(points)
                 midpoint = QPointF(
                     (points[0].x() + points[1].x()) / 2,
@@ -511,6 +515,42 @@ class Image(QMainWindow):
         length = math.hypot(dx, dy) or 1.0
         return QPointF(midpoint.x() + dx / length * distance,
                        midpoint.y() + dy / length * distance)
+
+    @staticmethod
+    def obb_edge_handles(points):
+        """Return the midpoint resize handle for every OBB edge."""
+        if len(points) != 4:
+            return []
+        return [
+            QPointF((point.x() + points[(index + 1) % 4].x()) / 2,
+                    (point.y() + points[(index + 1) % 4].y()) / 2)
+            for index, point in enumerate(points)
+        ]
+
+    @staticmethod
+    def resize_obb_edge(label, edge_index, position, minimum_size=1.0):
+        """Move one OBB edge while keeping its opposite edge fixed."""
+        label = Image.canonicalize_obb_label(label)
+        points = np.asarray(list(zip(label[1::2], label[2::2])),
+                            dtype=np.float64)
+        edge_index = int(edge_index) % 4
+        next_index = (edge_index + 1) % 4
+        opposite_start = (edge_index + 2) % 4
+        opposite_end = (edge_index + 3) % 4
+        selected_midpoint = (points[edge_index] + points[next_index]) / 2
+        opposite_midpoint = (
+            points[opposite_start] + points[opposite_end]) / 2
+        axis = selected_midpoint - opposite_midpoint
+        axis_length = float(np.linalg.norm(axis)) or 1.0
+        axis /= axis_length
+        requested = np.asarray(position, dtype=np.float64) - opposite_midpoint
+        distance = max(float(np.dot(requested, axis)),
+                       float(minimum_size))
+        new_midpoint = opposite_midpoint + axis * distance
+        half_edge = (points[next_index] - points[edge_index]) / 2
+        points[edge_index] = new_midpoint - half_edge
+        points[next_index] = new_midpoint + half_edge
+        return [int(label[0]), *points.reshape(-1).tolist()]
 
     @staticmethod
     def rotate_obb_label(label, degrees):
@@ -627,6 +667,12 @@ class Image(QMainWindow):
                 for point_index, point in enumerate(points):
                     if math.hypot(x - point.x(), y - point.y()) <= distance:
                         return 'vertex', label_index, point_index
+                if self.task == 'obb':
+                    for edge_index, point in enumerate(
+                            self.obb_edge_handles(points)):
+                        if math.hypot(
+                                x - point.x(), y - point.y()) <= distance:
+                            return 'edge', label_index, edge_index
                 if QPolygonF(points).containsPoint(
                         QPointF(x, y), Qt.OddEvenFill):
                     return 'shape', label_index, -1
@@ -736,14 +782,25 @@ class Image(QMainWindow):
     @staticmethod
     def circle_nine(x1, y1, x2, y2):
         """
-        给定矩形的左上角和右下角坐标，返回矩形上的9个点的坐标
+        给定矩形的左上角和右下角坐标，返回 8 个缩放锚点。
+
+        方法名为兼容旧调用保留；中心点已移除，框内区域用于整体拖动。
         """
         return [(x1, y1), (x2, y1), (x1, y2), (x2, y2),
                 (x1, y1 + (y2 - y1) // 2),
                 (x1 + (x2 - x1) // 2, y2),
                 (x2, y2 - (y2 - y1) // 2),
-                (x2 - (x2 - x1) // 2, y1),
-                (int(x1 + (x2 - x1) / 2), int(y1 + (y2 - y1) / 2))]
+                (x2 - (x2 - x1) // 2, y1)]
+
+    @staticmethod
+    def translate_detect_label(label, dx, dy, image_width, image_height):
+        """Translate a detection box without shrinking it at image edges."""
+        cls, x1, y1, x2, y2 = label
+        x1, x2 = sorted((float(x1), float(x2)))
+        y1, y2 = sorted((float(y1), float(y2)))
+        dx = min(max(float(dx), -x1), float(image_width) - x2)
+        dy = min(max(float(dy), -y1), float(image_height) - y2)
+        return [int(cls), x1 + dx, y1 + dy, x2 + dx, y2 + dy]
 
     def is_in_circle(self, x, y, circle_distance=25):
         hit_type, index, point_index = self.hit_test(
