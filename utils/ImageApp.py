@@ -651,6 +651,54 @@ class Image(QMainWindow):
             label[4] - label[2], label[3] - label[1]))
         return (angle + 180.0) % 360.0 - 180.0
 
+    @staticmethod
+    def _project_point_to_segment(point, start, end):
+        """Return distance, projection and ratio for a finite line segment."""
+        px, py = float(point[0]), float(point[1])
+        x1, y1 = float(start[0]), float(start[1])
+        x2, y2 = float(end[0]), float(end[1])
+        dx, dy = x2 - x1, y2 - y1
+        length_squared = dx * dx + dy * dy
+        if length_squared <= 1e-12:
+            projection = (x1, y1)
+            return math.hypot(px - x1, py - y1), projection, 0.0
+        ratio = max(0.0, min(1.0,
+                            ((px - x1) * dx + (py - y1) * dy)
+                            / length_squared))
+        projection = (x1 + ratio * dx, y1 + ratio * dy)
+        return (math.hypot(px - projection[0], py - projection[1]),
+                projection, ratio)
+
+    def segment_edge_hit_test(self, x, y, distance=12,
+                              annotation_index=None, vertex_guard=10):
+        """Find the closest editable segment edge and its projected point."""
+        if self.task != 'segment':
+            return None
+        if annotation_index is None:
+            indices = range(len(self.label_save) - 1, -1, -1)
+        elif 0 <= annotation_index < len(self.label_save):
+            indices = (annotation_index,)
+        else:
+            return None
+        for label_index in indices:
+            label = self.label_save[label_index]
+            points = [self.org_xy_to_new_xy(label[offset:offset + 2])
+                      for offset in range(1, len(label), 2)]
+            best = None
+            for edge_index, start in enumerate(points):
+                end = points[(edge_index + 1) % len(points)]
+                gap, projection, ratio = Image._project_point_to_segment(
+                    (x, y), start, end)
+                edge_length = math.dist(start, end)
+                endpoint_gap = min(ratio, 1.0 - ratio) * edge_length
+                if gap <= distance and endpoint_gap > vertex_guard:
+                    candidate = (gap, label_index, edge_index, projection)
+                    if best is None or candidate[0] < best[0]:
+                        best = candidate
+            if best is not None:
+                return best[1], best[2], best[3]
+        return None
+
     def task_hit_test(self, x, y, distance=10):
         """Return (kind, annotation index, control index) for non-box tasks."""
         for label_index in range(len(self.label_save) - 1, -1, -1):
@@ -667,6 +715,15 @@ class Image(QMainWindow):
                 for point_index, point in enumerate(points):
                     if math.hypot(x - point.x(), y - point.y()) <= distance:
                         return 'vertex', label_index, point_index
+                if self.task == 'segment':
+                    for edge_index, start in enumerate(points):
+                        end = points[(edge_index + 1) % len(points)]
+                        gap, _projection, _ratio = (
+                            Image._project_point_to_segment(
+                                (x, y), (start.x(), start.y()),
+                                (end.x(), end.y())))
+                        if gap <= distance:
+                            return 'shape', label_index, -1
                 if self.task == 'obb':
                     for edge_index, point in enumerate(
                             self.obb_edge_handles(points)):

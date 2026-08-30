@@ -845,7 +845,8 @@ class MainWin(QMainWindow):
                 self.boxShowWidget.set_rect_box()
         hints = {
             'detect': '拖动绘制检测框；拖动框内部可整体移动',
-            'segment': '逐点单击绘制多边形，双击或 Enter 闭合，Backspace 撤销点',
+            'segment': ('逐点单击绘制，双击或 Enter 闭合；'
+                        '选中后双击边线插入顶点'),
             'obb': '拖动绘制旋转框；边中点调单边，上方圆点或滚轮旋转',
             'pose': f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；右键记为缺失',
         }
@@ -1651,7 +1652,17 @@ class MainWin(QMainWindow):
         if event.type() == QEvent.MouseButtonDblClick:
             if (event.button() == Qt.LeftButton
                     and self.annotation_task == 'segment'):
-                self._finish_segment()
+                if self.task_draft_points:
+                    self._finish_segment()
+                else:
+                    selected = (self.is_choose_rect_index
+                                if self.is_choose_rect else None)
+                    edge_hit = self.img.segment_edge_hit_test(
+                        *position, annotation_index=selected)
+                    if edge_hit is None and selected is not None:
+                        edge_hit = self.img.segment_edge_hit_test(*position)
+                    if edge_hit is not None:
+                        self._insert_segment_vertex(edge_hit)
                 return True
 
         if event.type() == QEvent.MouseButtonPress:
@@ -1725,8 +1736,17 @@ class MainWin(QMainWindow):
                 self._redraw_task_drag()
                 return True
             hit = self.img.task_hit_test(*position)
+            edge_hit = None
+            if self.annotation_task == 'segment':
+                selected = (self.is_choose_rect_index
+                            if self.is_choose_rect else None)
+                edge_hit = self.img.segment_edge_hit_test(
+                    *position, annotation_index=selected)
+                if edge_hit is None and selected is not None:
+                    edge_hit = self.img.segment_edge_hit_test(*position)
             self.setCursor(
-                Qt.SizeAllCursor if hit[0] == 'shape'
+                Qt.PointingHandCursor if edge_hit is not None
+                else Qt.SizeAllCursor if hit[0] == 'shape'
                 else Qt.CrossCursor if hit[0] in (
                     'vertex', 'edge', 'bbox_vertex', 'keypoint', 'rotate')
                 else Qt.ArrowCursor)
@@ -1966,6 +1986,32 @@ class MainWin(QMainWindow):
         self.setCursor(Qt.CrossCursor)
         self._select_task_annotation(index)
         self.statusBar().showMessage('SEGMENT  |  实例分割标注已保存')
+        return True
+
+    def _insert_segment_vertex(self, edge_hit):
+        """Insert a projected vertex after the selected polygon edge."""
+        index, edge_index, canvas_point = edge_hit
+        if not (0 <= index < len(self.img.label_save)):
+            return False
+        original = list(self.img.label_save[index])
+        point = self.img.new_xy_to_org_xy(canvas_point)
+        insert_at = 1 + (edge_index + 1) * 2
+        updated = [*original[:insert_at], point[0], point[1],
+                   *original[insert_at:]]
+        try:
+            self.img.change_annotation(index, updated)
+            self.img.save()
+        except (OSError, ValueError) as exc:
+            try:
+                self.img.change_annotation(index, original)
+            except (OSError, ValueError, IndexError):
+                pass
+            self.statusBar().showMessage(
+                f'SEGMENT INSERT FAILED  |  {exc}', 9000)
+            return False
+        self._select_task_annotation(index)
+        self.statusBar().showMessage(
+            'SEGMENT  |  已插入新顶点；拖动该顶点可调整轮廓')
         return True
 
     def _append_pose_point(self, position, visibility=2):

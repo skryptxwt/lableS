@@ -254,6 +254,27 @@ class ImageLayeringTest(unittest.TestCase):
         self.assertEqual(
             Image.task_hit_test(image, 70, 70), ('shape', 1, -1))
 
+    def test_segment_edge_hit_projects_to_edge_and_preserves_order(self):
+        image = SimpleNamespace(
+            task='segment',
+            label_save=[[0, 10, 10, 110, 10, 110, 80, 10, 80]],
+            org_xy_to_new_xy=lambda point: point,
+        )
+
+        hit = Image.segment_edge_hit_test(image, 65, 14)
+
+        self.assertEqual(hit[:2], (0, 0))
+        self.assertEqual(hit[2], (65.0, 10.0))
+
+    def test_segment_edge_hit_does_not_duplicate_near_vertex(self):
+        image = SimpleNamespace(
+            task='segment',
+            label_save=[[0, 10, 10, 110, 10, 110, 80, 10, 80]],
+            org_xy_to_new_xy=lambda point: point,
+        )
+
+        self.assertIsNone(Image.segment_edge_hit_test(image, 13, 12))
+
 
 if __name__ == '__main__':
     unittest.main()

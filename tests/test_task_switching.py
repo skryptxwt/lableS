@@ -189,6 +189,42 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual(window.img.label_save, [])
         self.assertIn('SEGMENT SAVE FAILED', messages[-1])
 
+    def test_segment_vertex_is_inserted_after_hit_edge(self):
+        messages = []
+
+        class EditableImage:
+            def __init__(self):
+                self.label_save = [
+                    [3, 10, 10, 90, 10, 90, 90, 10, 90]
+                ]
+
+            @staticmethod
+            def new_xy_to_org_xy(point):
+                return point
+
+            def change_annotation(self, index, label):
+                self.label_save[index] = list(label)
+
+            @staticmethod
+            def save():
+                pass
+
+        image = EditableImage()
+        window = SimpleNamespace(
+            img=image,
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+            _select_task_annotation=lambda index: None,
+        )
+
+        inserted = MainWin._insert_segment_vertex(
+            window, (0, 1, (90.0, 50.0)))
+
+        self.assertTrue(inserted)
+        self.assertEqual(image.label_save[0], [
+            3, 10, 10, 90, 10, 90.0, 50.0, 90, 90, 10, 90])
+        self.assertIn('已插入新顶点', messages[-1])
+
 
 if __name__ == '__main__':
     unittest.main()
