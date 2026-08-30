@@ -14,7 +14,8 @@ from PyQt5.QtWidgets import (QMainWindow, QFileDialog, QListWidget, QMessageBox,
                              QAbstractItemView, QSizePolicy, QMenu,
                              QWidgetAction, QLabel, QSlider, QHBoxLayout,
                              QApplication, QDialog, QDialogButtonBox,
-                             QKeySequenceEdit, QActionGroup, QLineEdit)
+                             QKeySequenceEdit, QActionGroup, QLineEdit,
+                             QSpinBox, QComboBox)
 
 from .CategoryApp import CategoryApp
 from .tempCatewidget import CategoryApp as tempWidget
@@ -822,11 +823,10 @@ class MainWin(QMainWindow):
             return False
         if (reload_image and self.img_is_load and self.img
                 and self.img.label_save and task != self.annotation_task):
-            QMessageBox.warning(
-                self, '无法切换任务',
-                '当前图片已有标注。不同 YOLO 任务的标签格式不兼容，'
-                '请切换到空白数据集或清空当前标注后再切换。')
             self.task_actions[self.annotation_task].setChecked(True)
+            self.statusBar().showMessage(
+                'TASK SWITCH BLOCKED  |  当前图片已有标注；'
+                '请先切换空白图片或清空当前标注', 6000)
             return False
 
         previous_image = self.img.img_path if self.img_is_load and self.img else None
@@ -852,6 +852,8 @@ class MainWin(QMainWindow):
         return True
 
     def _reset_task_interaction(self):
+        if hasattr(self, '_obb_save_timer'):
+            self._obb_save_timer.stop()
         self.task_draft_points = []
         self.task_pose_bbox = None
         self.task_pose_points = []
@@ -863,6 +865,14 @@ class MainWin(QMainWindow):
         self.is_update_label = False
         self.is_choose_rect = False
         self.is_choose_rect_index = None
+        self.is_hover_move_allow = False
+        self.mouse_left_press = False
+        self.rect_save = None
+        self.rect_save_current = None
+        self.cross = False
+        self.hover = False
+        if self.img is not None:
+            self.img.only_index = False
 
     def configure_keypoints(self):
         dialog = QDialog(self)
