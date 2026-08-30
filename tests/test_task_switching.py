@@ -306,6 +306,11 @@ class TaskSwitchingTest(unittest.TestCase):
             3, 10, 10, 90, 10, 90.0, 50.0, 90, 90, 10, 90])
         self.assertIn('已插入新顶点', messages[-1])
 
+    def test_segment_vertex_insert_uses_shift_not_ctrl(self):
+        self.assertTrue(MainWin._segment_insert_requested(Qt.ShiftModifier))
+        self.assertFalse(MainWin._segment_insert_requested(Qt.ControlModifier))
+        self.assertFalse(MainWin._segment_insert_requested(Qt.NoModifier))
+
     def test_cancel_segment_draft_discards_only_unsaved_points(self):
         messages = []
         redraws = []

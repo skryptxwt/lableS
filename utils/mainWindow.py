@@ -909,7 +909,7 @@ class MainWin(QMainWindow):
         hints = {
             'detect': '拖动绘制检测框；拖动框内部可整体移动',
             'segment': ('逐点单击绘制，单击起点、双击或 Enter 闭合；'
-                        'Ctrl+单击边线插入顶点'),
+                        'Shift+单击边线插入顶点'),
             'obb': '拖动绘制旋转框；边中点调单边，上方圆点或滚轮旋转',
             'pose': (f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；'
                      'Shift+左键=遮挡，Alt+左键=缺失'),
@@ -1764,7 +1764,7 @@ class MainWin(QMainWindow):
                         self.img.new_xy_to_org_xy(position))
                     self._redraw_task_draft(cursor=position)
                     return True
-                if event.modifiers() & Qt.ControlModifier:
+                if MainWin._segment_insert_requested(event.modifiers()):
                     selected = (self.is_choose_rect_index
                                 if self.is_choose_rect else None)
                     edge_hit = self.img.segment_edge_hit_test(
@@ -2097,6 +2097,11 @@ class MainWin(QMainWindow):
             return False
         first = self.img.org_xy_to_new_xy(self.task_draft_points[0])
         return distance(first, position) <= radius
+
+    @staticmethod
+    def _segment_insert_requested(modifiers):
+        """Use Shift for vertex insertion; Ctrl is reserved for canvas pan."""
+        return bool(modifiers & Qt.ShiftModifier)
 
     def _finish_segment(self):
         points = self._clean_segment_points(self.task_draft_points)
