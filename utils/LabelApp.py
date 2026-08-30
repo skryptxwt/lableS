@@ -22,10 +22,10 @@ class _ObjectRow(QWidget):
         self.caption.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.delete_button = QPushButton('', self)
         self.delete_button.setObjectName('annotationRowDelete')
-        self.delete_button.setFixedSize(22, 22)
+        self.delete_button.setFixedSize(30, 26)
         self.delete_button.setIcon(
-            toolbar_icon('delete', size=16, color='#78868f'))
-        self.delete_button.setIconSize(QSize(12, 12))
+            toolbar_icon('delete', size=20, color='#6f7d86'))
+        self.delete_button.setIconSize(QSize(16, 16))
         self.delete_button.setToolTip(f'删除标注对象 {index + 1}')
         self.delete_button.hide()
         self.delete_button.clicked.connect(
@@ -86,7 +86,7 @@ class LabelApp(QWidget):
             self._row_widgets = {}
             for index, label in enumerate(labels):
                 item = QListWidgetItem(self.listWidget)
-                item.setSizeHint(QSize(0, 28))
+                item.setSizeHint(QSize(0, 32))
                 row = _ObjectRow(
                     self, index,
                     f'{index + 1} : {self._class_name(label[0])}')

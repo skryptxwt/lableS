@@ -175,10 +175,10 @@ QLabel#annotationObjectCaption {
 }
 
 QPushButton#annotationRowDelete {
-    min-width: 22px;
-    max-width: 22px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 26px;
+    max-height: 26px;
     background: transparent;
     border: 0;
     border-radius: 5px;
