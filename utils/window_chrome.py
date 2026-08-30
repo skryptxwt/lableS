@@ -412,9 +412,9 @@ class IndustrialSplitterHandle(QSplitterHandle):
         # not communicate on its own.
         splitter_name = self.splitter().objectName()
         is_queue_boundary = splitter_name == 'workspaceSplitter'
-        divider_thickness = 2 if is_queue_boundary else 1
+        divider_thickness = 3 if is_queue_boundary else 1
         divider_color = (QColor(37, 155, 200, 225) if self.hovered
-                         else QColor(72, 96, 109, 225)
+                         else QColor(53, 73, 84, 245)
                          if is_queue_boundary
                          else QColor(101, 122, 134, 145))
         if self.orientation() == Qt.Vertical:
@@ -422,8 +422,14 @@ class IndustrialSplitterHandle(QSplitterHandle):
                 0, (self.height() - divider_thickness) / 2,
                 self.width(), divider_thickness)
         else:
+            # The queue resize handle deliberately remains wide and easy to
+            # grab, but its visible divider belongs against the queue panel.
+            # Drawing it in the middle of the handle left a conspicuous gap
+            # beside the queue heading and content.
+            divider_x = (0 if is_queue_boundary
+                         else (self.width() - divider_thickness) / 2)
             divider = QRectF(
-                (self.width() - divider_thickness) / 2, 0,
+                divider_x, 0,
                 divider_thickness, self.height())
         painter.fillRect(divider, divider_color)
 
@@ -436,8 +442,10 @@ class IndustrialSplitterHandle(QSplitterHandle):
                 3)
         else:
             grip_height = min(38, max(18, self.height() - 12))
+            grip_x = (0 if is_queue_boundary
+                      else (self.width() - 3) / 2)
             grip = QRectF(
-                (self.width() - 3) / 2,
+                grip_x,
                 (self.height() - grip_height) / 2,
                 3,
                 grip_height)
