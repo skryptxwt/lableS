@@ -61,6 +61,8 @@ class MainWin(QMainWindow):
     # 总窗口
     def __init__(self):
         super().__init__()
+        self.setWindowIcon(QtGui.QIcon(str(
+            Path(__file__).parent / 'material' / 'app_icon.ico')))
 
         # -———————————————————————————————— UI相关变量 ————————————————————————————————#
 
