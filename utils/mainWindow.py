@@ -936,9 +936,9 @@ class MainWin(QMainWindow):
         if (self.annotation_task == 'pose' and self.img_is_load
                 and self.img.label_save
                 and (count, dimensions) != self.kpt_shape):
-            QMessageBox.warning(
-                self, '无法修改关键点结构',
-                '当前图片已有 Pose 标注，修改关键点数量会破坏标签格式。')
+            self.statusBar().showMessage(
+                'POSE CONFIG BLOCKED  |  当前图片已有关键点标注；'
+                '请在空白图片中修改关键点结构', 7000)
             return
         names = [name.strip() for name in names_edit.text().split(',')
                  if name.strip()]
@@ -1347,11 +1347,13 @@ class MainWin(QMainWindow):
                 task=self.annotation_task, kpt_shape=self.kpt_shape)
         except (OSError, ValueError) as exc:
             self.img_is_load = False
+            self.img = None
             self.label.clear()
             self.label.setText(
                 'LABEL FORMAT DOES NOT MATCH CURRENT TASK\n\n'
-                'SWITCH TASK MODE AND OPEN THE IMAGE AGAIN')
-            QMessageBox.warning(self, '标签格式不匹配', str(exc))
+                'SWITCH TASK MODE OR USE A COMPATIBLE LABEL FILE')
+            self.statusBar().showMessage(
+                f'LABEL FORMAT ERROR  |  {exc}', 9000)
             return False
         self.img = image
 
@@ -1929,10 +1931,20 @@ class MainWin(QMainWindow):
             label = [self.cls, *self.task_pose_bbox]
             for keypoint in self.task_pose_points:
                 label.extend(keypoint)
+            index = None
+            try:
+                index = self.img.append_annotation(label)
+                self.img.save()
+            except (OSError, ValueError) as exc:
+                if index is not None and index < len(self.img.label_save):
+                    self.img.pop(index)
+                self.task_pose_points.pop()
+                self.statusBar().showMessage(
+                    f'POSE SAVE FAILED  |  {exc}', 9000)
+                self._redraw_task_draft()
+                return
             self.task_pose_bbox = None
             self.task_pose_points = []
-            index = self.img.append_annotation(label)
-            self.img.save()
             self._select_task_annotation(index)
             self.statusBar().showMessage('POSE  |  关键点标注已保存')
         else:

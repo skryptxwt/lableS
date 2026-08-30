@@ -66,6 +66,72 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertIs(main_window_module.QSpinBox, QSpinBox)
         self.assertIs(main_window_module.QComboBox, QComboBox)
 
+    def test_incompatible_label_reports_status_without_native_dialog(self):
+        messages = []
+        label = SimpleNamespace(
+            clear=lambda: None,
+            setText=lambda text: None,
+        )
+        window = SimpleNamespace(
+            label=label,
+            annotation_task='pose',
+            kpt_shape=(17, 3),
+            img_is_load=True,
+            img=object(),
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+        )
+
+        with patch('utils.mainWindow.Image',
+                   side_effect=ValueError('pose 标签字段数量错误')):
+            with patch('utils.mainWindow.QMessageBox.warning',
+                       side_effect=AssertionError('不应打开原生模态警告框')):
+                loaded = MainWin.init_image(window, 'image.png', 'label.txt')
+
+        self.assertFalse(loaded)
+        self.assertFalse(window.img_is_load)
+        self.assertIsNone(window.img)
+        self.assertIn('LABEL FORMAT ERROR', messages[-1])
+
+    def test_pose_save_failure_rolls_back_last_point_and_annotation(self):
+        messages = []
+
+        class FailingImage:
+            def __init__(self):
+                self.label_save = []
+
+            @staticmethod
+            def new_xy_to_org_xy(position):
+                return position
+
+            def append_annotation(self, label):
+                self.label_save.append(label)
+                return len(self.label_save) - 1
+
+            @staticmethod
+            def save():
+                raise PermissionError('标签文件正在使用')
+
+            def pop(self, index):
+                self.label_save.pop(index)
+
+        window = SimpleNamespace(
+            kpt_shape=(2, 3),
+            task_pose_bbox=[10, 10, 100, 100],
+            task_pose_points=[[20, 20, 2]],
+            cls=0,
+            img=FailingImage(),
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+            _redraw_task_draft=lambda: None,
+        )
+
+        MainWin._append_pose_point(window, (30, 30), visibility=2)
+
+        self.assertEqual(window.task_pose_points, [[20, 20, 2]])
+        self.assertEqual(window.img.label_save, [])
+        self.assertIn('POSE SAVE FAILED', messages[-1])
+
 
 if __name__ == '__main__':
     unittest.main()
