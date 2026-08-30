@@ -27,6 +27,7 @@ from .thumbnailApp import thumbnailApp
 from .modificationCls import modificationCls
 from .common_fun import CONFIG_PATH, distance, root
 from .class_styles import build_class_styles, normalize_class_style
+from .annotation_history import AnnotationHistory
 from .industrial_theme import INDUSTRIAL_QSS
 from .io_workers import (ImageScanWorker, LabelExportWorker,
                          LabelImportWorker, merge_label_file)
@@ -39,6 +40,8 @@ root = root.parent
 LOGGER = logging.getLogger('labels')
 
 DEFAULT_SHORTCUTS = {
+    'undo': ('撤销标注操作', 'Ctrl+Z'),
+    'redo': ('恢复标注操作', 'Ctrl+Y'),
     'previous_image': ('上一张图片', 'Z'),
     'next_image': ('下一张图片', 'X'),
     'detect': ('执行检测', 'C'),
@@ -48,6 +51,19 @@ DEFAULT_SHORTCUTS = {
     'reset_view': ('重置画布', '0'),
     'save_labels': ('保存标签', 'Ctrl+S'),
     'insert_segment_vertex': ('插入分割点', 'I'),
+}
+
+HISTORY_ACTION_LABELS = {
+    'DETECT RELEASE': '创建或调整检测框',
+    'TASK EDIT': '调整标注',
+    'OBB CREATE': '创建旋转框',
+    'OBB ROTATION': '旋转标注框',
+    'SEGMENT CREATE': '创建分割轮廓',
+    'SEGMENT INSERT': '插入分割点',
+    'POSE CREATE': '创建关键点标注',
+    'CATEGORY CHANGE': '切换类别',
+    'DELETE': '删除标注',
+    'AI DETECTION': '模型检测结果',
 }
 
 COCO_KEYPOINT_NAMES = (
@@ -122,6 +138,7 @@ class MainWin(QMainWindow):
             key: default for key, (_label, default) in DEFAULT_SHORTCUTS.items()
         }
         self.shortcuts = {}
+        self.annotation_history = AnnotationHistory(limit=80)
         self.wheel_pan_enabled = True
         self.wheel_zoom_enabled = True
         self._create_shortcuts()
@@ -1218,6 +1235,8 @@ class MainWin(QMainWindow):
 
     def _create_shortcuts(self):
         callbacks = {
+            'undo': self.undo_annotation,
+            'redo': self.redo_annotation,
             'previous_image': self.handleShortcut1_,
             'next_image': self.handleShortcut2_,
             'detect': self.detect_,
@@ -1303,7 +1322,9 @@ class MainWin(QMainWindow):
         disable_button.clicked.connect(editor.clear)
         editor_row.addWidget(editor, 1)
         editor_row.addWidget(disable_button)
-        hint = QLabel('清空按键可禁用此项；同一按键不能重复使用。', dialog)
+        hint = QLabel(
+            '支持 Ctrl / Shift / Alt 组合键；清空可禁用，同一按键不能重复。',
+            dialog)
         hint.setStyleSheet('color: #667780;')
         buttons = QDialogButtonBox(
             QDialogButtonBox.Cancel | QDialogButtonBox.Ok, parent=dialog)
@@ -1497,21 +1518,89 @@ class MainWin(QMainWindow):
             if self.init_image(img_path, p):
                 self.categoryShowWidget.init()
 
+    @staticmethod
+    def _compatible_label_tasks(label_path, kpt_shape):
+        """Return tasks that can parse a label file without modifying it."""
+        if label_path is None or not Path(label_path).is_file():
+            return []
+        compatible = []
+        for task in DataApp.TASKS:
+            try:
+                DataApp(
+                    label_path, task=task, kpt_shape=kpt_shape,
+                    accept_prediction_output=True)
+            except (OSError, ValueError):
+                continue
+            compatible.append(task)
+        return compatible
+
+    def _choose_compatible_label_task(self, label_path, compatible, error):
+        """Ask which compatible workspace should open an existing label."""
+        labels = {
+            'detect': '检测框', 'segment': '实例分割',
+            'obb': 'OBB 旋转框', 'pose': '关键点',
+        }
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle('标签格式不匹配')
+        dialog.setIcon(QMessageBox.Warning)
+        dialog.setText('当前任务无法读取这份标签。')
+        detail = (
+            f'标签文件：{Path(label_path).name}\n'
+            f'当前任务：{labels.get(self.annotation_task, self.annotation_task)}\n'
+            f'可兼容任务：{"、".join(labels[item] for item in compatible)}')
+        dialog.setInformativeText(detail)
+        dialog.setDetailedText(str(error))
+        task_buttons = {}
+        for task in compatible:
+            button = dialog.addButton(
+                f'切换到{labels[task]}', QMessageBox.AcceptRole)
+            task_buttons[button] = task
+        cancel = dialog.addButton('暂不打开', QMessageBox.RejectRole)
+        dialog.setDefaultButton(next(iter(task_buttons), cancel))
+        dialog.exec_()
+        return task_buttons.get(dialog.clickedButton())
+
+    def _show_label_load_error(self, label_path, error, compatible=()):
+        self.img_is_load = False
+        self.img = None
+        self.label.clear()
+        if compatible:
+            suggestion = '请从顶部“任务”菜单切换到匹配的标注类型'
+        else:
+            suggestion = '请检查标签字段数量、数值及关键点配置'
+        self.label.setText(
+            f'标签格式与当前任务不匹配\n\n{suggestion}\n\n'
+            f'{Path(label_path).name if label_path else "未找到标签文件"}')
+        if hasattr(self.label, 'setAlignment'):
+            self.label.setAlignment(Qt.AlignCenter)
+        self.statusBar().showMessage(
+            f'LABEL FORMAT ERROR  |  {error}', 9000)
+
     # 从本地加载图片，有标签就添加标签
-    def init_image(self, img_path, label_path):
+    def init_image(self, img_path, label_path, offer_task_recovery=True):
         try:
             image = Image(
                 self.label, img_path, label_path, parent=self,
                 task=self.annotation_task, kpt_shape=self.kpt_shape)
-        except (OSError, ValueError) as exc:
-            self.img_is_load = False
-            self.img = None
-            self.label.clear()
-            self.label.setText(
-                'LABEL FORMAT DOES NOT MATCH CURRENT TASK\n\n'
-                'SWITCH TASK MODE OR USE A COMPATIBLE LABEL FILE')
-            self.statusBar().showMessage(
-                f'LABEL FORMAT ERROR  |  {exc}', 9000)
+        except ValueError as exc:
+            compatible = MainWin._compatible_label_tasks(
+                label_path, self.kpt_shape)
+            if offer_task_recovery and compatible:
+                selected = MainWin._choose_compatible_label_task(
+                    self,
+                    label_path, compatible, exc)
+                if selected is not None:
+                    MainWin.set_annotation_task(
+                        self,
+                        selected, persist=True, reload_image=False)
+                    return MainWin.init_image(
+                        self,
+                        img_path, label_path, offer_task_recovery=False)
+            MainWin._show_label_load_error(
+                self, label_path, exc, compatible)
+            return False
+        except OSError as exc:
+            MainWin._show_label_load_error(self, label_path, exc)
             return False
         self.img = image
 
@@ -1521,6 +1610,7 @@ class MainWin(QMainWindow):
         self.img.show_box_text = self.show_box_text.isChecked()
 
         self.img_is_load = True
+        self._activate_annotation_history(self.img)
         self.statusBar().showMessage(
             f'IMAGE READY  |  {Path(img_path).name}  |  {len(self.img.label_save)} OBJECTS')
         return True
@@ -1745,7 +1835,6 @@ class MainWin(QMainWindow):
                     self._interaction_redraw_timer.stop()
                     self._flush_interaction_redraw()
                     self._cancel_interaction_redraw()
-                    self._save_annotations('DETECT RELEASE')
 
                 # is_first_add_box 为 False 才表示本次拖动真的创建了新框。
                 # 仅按下/松开时不能检查、更不能删除最后一个旧框。
@@ -1758,6 +1847,10 @@ class MainWin(QMainWindow):
                     if distance(x1y1, x2y2) < 25:
                         self.deleteBox_(-1)
                         self.is_add_box = False
+                    else:
+                        self._save_annotations('DETECT RELEASE')
+                elif self.is_update_label:
+                    self._save_annotations('DETECT RELEASE')
 
                 release_pos = self._event_canvas_pos(source, event)
                 if self.img_is_load and distance(
@@ -2321,7 +2414,7 @@ class MainWin(QMainWindow):
         index = None
         try:
             index = self.img.append_annotation(label)
-            self.img.save()
+            MainWin._save_and_record_annotations(self, 'SEGMENT CREATE')
         except (OSError, ValueError) as exc:
             if index is not None and index < len(self.img.label_save):
                 self.img.pop(index)
@@ -2450,7 +2543,7 @@ class MainWin(QMainWindow):
                    *original[insert_at:]]
         try:
             self.img.change_annotation(index, updated)
-            self.img.save()
+            MainWin._save_and_record_annotations(self, 'SEGMENT INSERT')
         except (OSError, ValueError) as exc:
             try:
                 self.img.change_annotation(index, original)
@@ -2500,7 +2593,7 @@ class MainWin(QMainWindow):
             index = None
             try:
                 index = self.img.append_annotation(label)
-                self.img.save()
+                MainWin._save_and_record_annotations(self, 'POSE CREATE')
             except (OSError, ValueError) as exc:
                 if index is not None and index < len(self.img.label_save):
                     self.img.pop(index)
@@ -3428,6 +3521,7 @@ class MainWin(QMainWindow):
         for annotation in annotations:
             target.basedata.append(annotation)
         target.save()
+        self._record_annotation_history('AI DETECTION', image=target)
         if self.img is target:
             target.label_save = []
             target.load_new_labels()
@@ -3436,12 +3530,137 @@ class MainWin(QMainWindow):
         self.statusBar().showMessage(
             f'INFERENCE COMPLETE  |  {Path(target.img_path).name}  |  {len(annotations)} OBJECTS ADDED')
 
-    def _save_annotations(self, context='SAVE'):
+    @staticmethod
+    def _annotation_history_key(image):
+        return (str(Path(image.img_path).resolve()), str(image.task))
+
+    @staticmethod
+    def _annotation_history_rows(image):
+        # Match DataApp.save() precision exactly.  Otherwise reopening an
+        # image turns e.g. 0.123456 into 0.123 (detect) and activate() treats
+        # the harmless serialization difference as an external label edit,
+        # discarding that image's undo/redo cursor.
+        precision = 3 if image.task == 'detect' else 6
+        rows = []
+        for class_id, *coordinates in image.basedata:
+            rows.append([
+                int(class_id),
+                *(round(float(value), precision) for value in coordinates),
+            ])
+        return rows
+
+    def _activate_annotation_history(self, image):
+        self.annotation_history.activate(
+            self._annotation_history_key(image),
+            self._annotation_history_rows(image))
+
+    def _record_annotation_history(self, context, image=None):
+        image = self.img if image is None else image
+        if image is None:
+            return False
+        key = self._annotation_history_key(image)
+        if not self.annotation_history.has_document(key):
+            # Normally initialized when the image opens.  This fallback keeps
+            # non-current inference targets safe without manufacturing an
+            # invalid undo state.
+            self._activate_annotation_history(image)
+            return False
+        return self.annotation_history.record(
+            key, self._annotation_history_rows(image),
+            HISTORY_ACTION_LABELS.get(context, context))
+
+    def _restore_annotation_history(self, rows, context):
+        image = self.img
+        try:
+            for row in rows:
+                image.basedata._validate(row)
+            image.basedata.data = [list(row) for row in rows]
+            image.label_save = [
+                image._annotation_from_normalized(row) for row in rows]
+            image.save()
+        except (OSError, TypeError, ValueError) as exc:
+            LOGGER.exception(
+                'History restore failed | context=%s image=%s',
+                context, getattr(image, 'img_path', None))
+            self.statusBar().showMessage(
+                f'{context} FAILED  |  历史状态无法恢复：{exc}', 9000)
+            return False
+
+        self._cancel_interaction_redraw()
+        self.task_draft_points = []
+        self.task_pose_bbox = None
+        self.task_pose_points = []
+        self.task_drag = None
+        self.task_edit = None
+        self.detect_drag_original = None
+        self.detect_drag_start_org = None
+        self.is_add_box = False
+        self.is_update_label = False
+        self.mouse_left_press = False
+        image.only_index = False
+        self.len_rect = len(image.label_save)
+        self._clear_task_selection()
+        self.move_xy()
+        return True
+
+    def undo_annotation(self):
+        if not self.img_is_load or self.img is None:
+            return False
+        if self._cancel_current_annotation():
+            return True
+        if self._obb_save_timer.isActive():
+            self._obb_save_timer.stop()
+            self._save_annotations('OBB ROTATION')
+        key = self._annotation_history_key(self.img)
+        result = self.annotation_history.undo(key)
+        if result is None:
+            self.statusBar().showMessage('UNDO  |  没有可撤销的标注操作', 2500)
+            return False
+        rows, action = result
+        if not self._restore_annotation_history(rows, 'UNDO'):
+            self.annotation_history.redo(key)
+            return False
+        self.statusBar().showMessage(f'UNDO  |  已撤销：{action}', 3500)
+        return True
+
+    def redo_annotation(self):
+        if not self.img_is_load or self.img is None:
+            return False
+        if self._cancel_current_annotation():
+            return True
+        key = self._annotation_history_key(self.img)
+        result = self.annotation_history.redo(key)
+        if result is None:
+            self.statusBar().showMessage('REDO  |  没有可恢复的标注操作', 2500)
+            return False
+        rows, action = result
+        if not self._restore_annotation_history(rows, 'REDO'):
+            self.annotation_history.undo(key)
+            return False
+        self.statusBar().showMessage(f'REDO  |  已恢复：{action}', 3500)
+        return True
+
+    def _save_and_record_annotations(self, context):
+        """Persist a completed mutation and add it to history when available.
+
+        Keeping this small method independent from the full window state also
+        preserves the original exception-based rollback paths used by segment
+        and pose creation.
+        """
+        self.img.save()
+        recorder = getattr(self, '_record_annotation_history', None)
+        if callable(recorder):
+            recorder(context)
+
+    def _save_annotations(self, context='SAVE', record_history=True):
         """Save without allowing a filesystem error to poison Qt state."""
         if not self.img_is_load or self.img is None:
             return False
         try:
-            self.img.save()
+            if record_history:
+                MainWin._save_and_record_annotations(self, context)
+            else:
+                self.img.save()
             return True
         except OSError as exc:
             LOGGER.exception(

@@ -170,7 +170,7 @@ class CategoryApp(QWidget):
             new_label = list(self.main_window.img.label_save[index])
             new_label[0] = self.cls_index
             self.main_window.img.change(index, new_label)
-            self.main_window.img.save()
+            self.main_window._save_annotations('CATEGORY CHANGE')
 
             self.main_window.cls = self.cls_index
             self.main_window.boxShowWidget.set_rect_box(index, class_name)

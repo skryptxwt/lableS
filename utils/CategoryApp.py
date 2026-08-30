@@ -53,7 +53,7 @@ class CategoryApp(QWidget):
         new_label[0] = int(self.cls_index)
         self.main_window.img.change(index, new_label)
 
-        self.main_window.img.save()
+        self.main_window._save_annotations('CATEGORY CHANGE')
         self.main_window.change_label_name = False
 
         self.main_window.cls = int(self.cls_index)
