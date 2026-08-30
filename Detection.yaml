@@ -8,17 +8,17 @@ colors:
   - 36
   - 155
   - 200
-  - 50
+  - 51
   2:
   - 85
   - 0
   - 255
   - 46
   3:
-  - 0
-  - 0
-  - 0
-  - 50
+  - 178
+  - 255
+  - 206
+  - 143
   4:
   - 255
   - 255
@@ -87,7 +87,7 @@ names:
   13: '13'
 save_path: temp_folder
 background_image: C:/Users/22320/Desktop/LabelS/1.png
-background_opacity: 65
+background_opacity: 100
 class_styles:
   0:
     border:
@@ -95,7 +95,7 @@ class_styles:
     - 233
     - 255
     - 255
-    border_width: 2
+    border_width: 1
     fill:
     - 135
     - 255
@@ -106,6 +106,7 @@ class_styles:
     - 0
     - 0
     - 255
+    handle_size: 6
     text:
     - 255
     - 37
@@ -119,23 +120,24 @@ class_styles:
     - 155
     - 200
     - 230
-    border_width: 2
+    border_width: 1
     fill:
     - 36
     - 155
     - 200
-    - 50
+    - 51
     handle:
     - 238
     - 68
     - 75
     - 230
+    handle_size: 6
     text:
     - 36
     - 155
     - 200
     - 255
-    text_size: 20
+    text_size: 15
     text_position: outside_top_left
   2:
     border:
@@ -154,6 +156,7 @@ class_styles:
     - 238
     - 183
     - 230
+    handle_size: 8
     text:
     - 85
     - 0
@@ -169,17 +172,18 @@ class_styles:
     - 230
     border_width: 2
     fill:
-    - 0
-    - 0
-    - 0
-    - 50
+    - 178
+    - 255
+    - 206
+    - 143
     handle:
     - 238
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
-    - 0
+    - 255
     - 0
     - 0
     - 255
@@ -202,6 +206,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 255
     - 255
@@ -226,6 +231,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 0
     - 170
@@ -250,6 +256,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 36
     - 155
@@ -274,6 +281,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 25
     - 255
@@ -298,6 +306,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 139
     - 255
@@ -322,6 +331,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 85
     - 255
@@ -346,6 +356,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 36
     - 155
@@ -370,6 +381,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 255
     - 0
@@ -394,6 +406,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 36
     - 155
@@ -418,6 +431,7 @@ class_styles:
     - 68
     - 75
     - 230
+    handle_size: 8
     text:
     - 85
     - 0
@@ -436,9 +450,9 @@ shortcuts:
   zoom_out: '-'
   reset_view: '0'
   save_labels: Ctrl+S
-wheel_pan_enabled: true
+wheel_pan_enabled: false
 wheel_zoom_enabled: true
-annotation_task: detect
+annotation_task: obb
 kpt_shape:
 - 17
 - 3
@@ -461,19 +475,35 @@ keypoint_names:
 - 左踝
 - 右踝
 kpt_skeleton:
-- [5, 6]
-- [5, 7]
-- [7, 9]
-- [6, 8]
-- [8, 10]
-- [5, 11]
-- [6, 12]
-- [11, 12]
-- [11, 13]
-- [13, 15]
-- [12, 14]
-- [14, 16]
-- [0, 1]
-- [0, 2]
-- [1, 3]
-- [2, 4]
+- - 5
+  - 6
+- - 5
+  - 7
+- - 7
+  - 9
+- - 6
+  - 8
+- - 8
+  - 10
+- - 5
+  - 11
+- - 6
+  - 12
+- - 11
+  - 12
+- - 11
+  - 13
+- - 13
+  - 15
+- - 12
+  - 14
+- - 14
+  - 16
+- - 0
+  - 1
+- - 0
+  - 2
+- - 1
+  - 3
+- - 2
+  - 4
