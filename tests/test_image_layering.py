@@ -43,6 +43,13 @@ class ImageLayeringTest(unittest.TestCase):
     def test_paint_order_places_latest_box_last(self):
         self.assertEqual(Image._paint_order(3), [0, 1, 2])
 
+    def test_annotation_pen_uses_round_subpixel_strokes(self):
+        pen = Image._annotation_pen((20, 120, 220, 255), 2.5)
+
+        self.assertAlmostEqual(pen.widthF(), 2.5)
+        self.assertEqual(pen.capStyle(), Qt.RoundCap)
+        self.assertEqual(pen.joinStyle(), Qt.RoundJoin)
+
     def test_selected_box_is_painted_on_top(self):
         self.assertEqual(Image._paint_order(3, 0), [1, 2, 0])
 

@@ -4,7 +4,7 @@ import cv2
 import math
 import numpy as np
 from PyQt5 import QtGui
-from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from PyQt5.QtCore import QPointF, QRect, QRectF, Qt
 from PyQt5.QtWidgets import QMainWindow
 from PyQt5.QtGui import (QPixmap, QImage, QPainter, QColor, QFont, QPen,
                          QPolygonF)
@@ -22,6 +22,25 @@ def normalize_color(value, default=(0, 255, 0, 50)):
 class Image(QMainWindow):
 
     TASK_MODES = {'detect': 0, 'segment': 1, 'pose': 2, 'obb': 3}
+
+    @staticmethod
+    def _enable_quality_rendering(painter):
+        """Use the same sub-pixel antialiasing settings for every overlay."""
+        painter.setRenderHints(
+            QPainter.Antialiasing
+            | QPainter.TextAntialiasing
+            | QPainter.SmoothPixmapTransform,
+            True)
+
+    @staticmethod
+    def _annotation_pen(color, width=1.0, style=Qt.SolidLine):
+        """Create a smooth pen without sharp caps or jagged corner joins."""
+        pen = QPen(QColor(*color))
+        pen.setWidthF(max(0.8, float(width)))
+        pen.setStyle(style)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        return pen
 
     def __init__(self, screen_label, img_path: str, label_path, mod=0,
                  parent=None, task=None, kpt_shape=(17, 3)):
@@ -78,10 +97,15 @@ class Image(QMainWindow):
         scale_w = self.org_img.shape[1] / w
 
         scale_ = max(scale_w, scale_h)
-        # 双线性插值
+        target_width = max(1, int(self.org_img.shape[1] / scale_))
+        target_height = max(1, int(self.org_img.shape[0] / scale_))
+        interpolation = (cv2.INTER_AREA
+                         if target_width < self.org_width
+                         or target_height < self.org_height
+                         else cv2.INTER_CUBIC)
         zoom_img = cv2.resize(self.org_img,
-                              (int(self.org_img.shape[1] / scale_), int(self.org_img.shape[0] / scale_))
-                              , interpolation=cv2.INTER_LINEAR)
+                              (target_width, target_height),
+                              interpolation=interpolation)
         back = np.zeros((h, w, 3), dtype=np.uint8)
 
         if scale_h >= scale_w:
@@ -148,28 +172,27 @@ class Image(QMainWindow):
         owns_painter = painter is None
         if owns_painter:
             painter = QPainter(pixmap)
+            self._enable_quality_rendering(painter)
 
         # 绘制矩形
-        pen = QPen(QColor(*border_color), max(1, box_thickness), Qt.SolidLine)
-        painter.setPen(pen)
+        painter.setPen(self._annotation_pen(
+            border_color, max(1, box_thickness)))
         brush_color = QColor(*fill_color)
 
         painter.setBrush(brush_color)
 
         if not self.show_box_fill:
             painter.setBrush(Qt.NoBrush)
-        rect = QRect(QPoint(*x1y1), QPoint(*x2y2))
+        rect = QRectF(QPointF(*x1y1), QPointF(*x2y2)).normalized()
         painter.drawRect(rect)
 
         if is_show_nine_circle and self.show_box_circle:
-            # 绘制点 使用setPen方法设置点的大小
-            painter.setPen(QColor(*point_color))  # 设置画笔颜色
-            pen = painter.pen()
             circle_radius = circle_radius * self.wheel_scale if circle_radius * self.wheel_scale ** 2 < 1 else circle_radius
-            pen.setWidth(int(circle_radius))
-            painter.setPen(pen)
-            for i in self.circle_nine(*x1y1, *x2y2):
-                painter.drawPoint(QPoint(*i))
+            radius = max(1.5, float(circle_radius) / 2)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(*point_color))
+            for point in self.circle_nine(*x1y1, *x2y2):
+                painter.drawEllipse(QPointF(*point), radius, radius)
 
         font = QFont("Arial")
         font.setPixelSize(max(6, int(text_size)))
@@ -215,13 +238,14 @@ class Image(QMainWindow):
         # 图像上绘制文字
         pixmap = self.screen_label.pixmap()
         painter = QPainter(pixmap)
+        self._enable_quality_rendering(painter)
 
         painter.setPen(QColor(*text_color))  # 设置画笔颜色为黑色
 
         # 使用drawText方法显示文本
         font = QFont("Arial", text_size)  # 设置字体和字号
         painter.setFont(font)
-        painter.drawText(QPoint(*x1y1), text)
+        painter.drawText(QPointF(*x1y1), text)
 
         painter.end()
 
@@ -232,18 +256,18 @@ class Image(QMainWindow):
         # 图像上绘制圆形
         pixmap = self.screen_label.pixmap()
         painter = QPainter(pixmap)
+        self._enable_quality_rendering(painter)
 
         if is_ball:
             # 绘制圆形, 实心
             painter.setBrush(QColor(*circle_color))
-            painter.drawEllipse(QPoint(*x1y1), circle_radius, circle_radius)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QPointF(*x1y1), circle_radius, circle_radius)
         else:
             # 绘制方点 使用setPen方法设置点的大小
-            painter.setPen(QColor(*circle_color))  # 设置画笔颜色为黑色
-            pen = painter.pen()
-            pen.setWidth(circle_radius)
-            painter.setPen(pen)
-            painter.drawPoint(QPoint(*x1y1))
+            painter.setPen(self._annotation_pen(
+                circle_color, circle_radius))
+            painter.drawPoint(QPointF(*x1y1))
 
         painter.end()
 
@@ -254,13 +278,11 @@ class Image(QMainWindow):
         # 图像上绘制线
         pixmap = self.screen_label.pixmap()
         painter = QPainter(pixmap)
+        self._enable_quality_rendering(painter)
 
         # 绘制线
-        painter.setPen(QColor(*line_color))
-        pen = painter.pen()
-        pen.setWidth(line_thickness)
-        painter.setPen(pen)
-        painter.drawLine(QPoint(*x1y1), QPoint(*x2y2))
+        painter.setPen(self._annotation_pen(line_color, line_thickness))
+        painter.drawLine(QPointF(*x1y1), QPointF(*x2y2))
 
         painter.end()
 
@@ -318,7 +340,6 @@ class Image(QMainWindow):
 
             x1, y1 = self.org_xy_to_new_xy((x1, y1))  # 坐标变换, 从原始坐标转换为图像坐标
             x2, y2 = self.org_xy_to_new_xy((x2, y2))
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             cls = int(cls)
 
             box_cls = self.parent.names[cls] if self.parent and self.parent.names.get(cls) else str(cls)
@@ -357,13 +378,14 @@ class Image(QMainWindow):
             # 一帧只创建一个 QPainter、只向 QLabel 提交一次。原实现每个框
             # 都 setPixmap，一旦框较多或大量重叠，MouseMove 会迅速堆积。
             painter = QPainter(pixmap)
+            self._enable_quality_rendering(painter)
             try:
                 for label_index in self._paint_order(
                         label_count, selected_index):
                     label = self.label_save[label_index]
                     cls, x1, y1, x2, y2 = label
-                    x1, y1 = map(int, self.org_xy_to_new_xy((x1, y1)))
-                    x2, y2 = map(int, self.org_xy_to_new_xy((x2, y2)))
+                    x1, y1 = self.org_xy_to_new_xy((x1, y1))
+                    x2, y2 = self.org_xy_to_new_xy((x2, y2))
                     cls = int(cls)
 
                     box_cls = parent_names[cls] if parent_names and cls in parent_names else str(cls)
@@ -406,7 +428,7 @@ class Image(QMainWindow):
         if pixmap is None or not order:
             return
         painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        self._enable_quality_rendering(painter)
         try:
             for label_index in order:
                 label = self.label_save[label_index]
@@ -432,7 +454,7 @@ class Image(QMainWindow):
             return
         border, width = display_border(
             style['border'], style['border_width'], selected)
-        painter.setPen(QPen(QColor(*border), width, Qt.SolidLine))
+        painter.setPen(self._annotation_pen(border, width))
         painter.setBrush(
             QColor(*style['fill']) if self.show_box_fill else Qt.NoBrush)
         polygon = QPolygonF(points)
@@ -443,17 +465,17 @@ class Image(QMainWindow):
             painter.setBrush(QColor(*style['handle']))
             for point in points:
                 painter.drawRoundedRect(
-                    QRect(int(point.x()) - 4, int(point.y()) - 4, 8, 8), 2, 2)
+                    QRectF(point.x() - 4, point.y() - 4, 8, 8), 2, 2)
             if rotated and len(points) == 4:
                 for edge in self.obb_edge_handles(points):
                     painter.drawRoundedRect(
-                        QRect(int(edge.x()) - 4, int(edge.y()) - 3, 8, 6),
+                        QRectF(edge.x() - 4, edge.y() - 3, 8, 6),
                         2, 2)
                 handle = self.obb_rotation_handle(points)
                 midpoint = QPointF(
                     (points[0].x() + points[1].x()) / 2,
                     (points[0].y() + points[1].y()) / 2)
-                painter.setPen(QPen(QColor(*border), 1))
+                painter.setPen(self._annotation_pen(border, 1))
                 painter.drawLine(midpoint, handle)
                 painter.setPen(Qt.NoPen)
                 painter.drawEllipse(handle, 5, 5)
@@ -488,7 +510,7 @@ class Image(QMainWindow):
 
         skeleton = getattr(self.parent, 'kpt_skeleton', ())
         if skeleton:
-            painter.setPen(QPen(QColor(*style['border']), 2))
+            painter.setPen(self._annotation_pen(style['border'], 2))
             for start, end in skeleton:
                 if (start < len(points) and end < len(points)
                         and points[start][1] and points[end][1]):
@@ -497,7 +519,7 @@ class Image(QMainWindow):
         for point, visibility in points:
             if visibility == 0:
                 continue
-            painter.setPen(QPen(QColor(*style['border']), 2))
+            painter.setPen(self._annotation_pen(style['border'], 2))
             painter.setBrush(
                 QColor(*style['handle']) if visibility == 2 else Qt.NoBrush)
             painter.drawEllipse(point, 4 if selected else 3,
@@ -1034,10 +1056,10 @@ class Image(QMainWindow):
         if pixmap is None:
             return
         painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        self._enable_quality_rendering(painter)
         style = self._class_style(self.parent.cls if self.parent else 0)
         border, width = display_border(style['border'], 2, True)
-        painter.setPen(QPen(QColor(*border), width, Qt.DashLine))
+        painter.setPen(self._annotation_pen(border, width, Qt.DashLine))
         painter.setBrush(QColor(*style['fill']))
         if points:
             canvas_points = [QPointF(*self.org_xy_to_new_xy(point))
@@ -1057,7 +1079,7 @@ class Image(QMainWindow):
                 painter.drawEllipse(point, 4, 4)
             if close_polygon and len(canvas_points) >= 3:
                 painter.setBrush(Qt.NoBrush)
-                painter.setPen(QPen(QColor(*border), max(2, width)))
+                painter.setPen(self._annotation_pen(border, max(2, width)))
                 painter.drawEllipse(canvas_points[0], 9, 9)
         if bbox is not None:
             p1 = QPointF(*self.org_xy_to_new_xy(bbox[:2]))

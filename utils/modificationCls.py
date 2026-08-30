@@ -65,7 +65,11 @@ class ClassStylePreview(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHints(
+            QPainter.Antialiasing
+            | QPainter.TextAntialiasing
+            | QPainter.SmoothPixmapTransform,
+            True)
         painter.fillRect(self.rect(), QColor('#e8edf0'))
 
         painter.setPen(QPen(QColor(129, 145, 155, 35), 1))
@@ -81,7 +85,11 @@ class ClassStylePreview(QWidget):
             max(90, self.height() * 0.56),
         )
         painter.setBrush(QColor(*self.fill))
-        painter.setPen(QPen(QColor(*self.border), self.border_width))
+        border_pen = QPen(QColor(*self.border))
+        border_pen.setWidthF(max(0.8, float(self.border_width)))
+        border_pen.setCapStyle(Qt.RoundCap)
+        border_pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(border_pen)
         painter.drawRoundedRect(sample, 3, 3)
 
         painter.setPen(Qt.NoPen)
