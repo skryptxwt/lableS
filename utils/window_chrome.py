@@ -405,6 +405,23 @@ class IndustrialSplitterHandle(QSplitterHandle):
             painter.fillRect(self.rect(), QColor('#e1e7eb'))
         if self.hovered:
             painter.fillRect(self.rect(), QColor(37, 155, 200, 24))
+
+        # Keep a continuous divider visible over both light and image-backed
+        # panels.  The wider handle remains an easy resize target, while this
+        # slim line provides the visual boundary that the old short grip did
+        # not communicate on its own.
+        splitter_name = self.splitter().objectName()
+        divider_alpha = 185 if splitter_name == 'workspaceSplitter' else 145
+        divider_color = (QColor(37, 155, 200, 205) if self.hovered
+                         else QColor(101, 122, 134, divider_alpha))
+        if self.orientation() == Qt.Vertical:
+            divider = QRectF(0, (self.height() - 1) / 2,
+                             self.width(), 1)
+        else:
+            divider = QRectF((self.width() - 1) / 2, 0,
+                             1, self.height())
+        painter.fillRect(divider, divider_color)
+
         if self.orientation() == Qt.Vertical:
             grip_width = min(38, max(18, self.width() - 12))
             grip = QRectF(
