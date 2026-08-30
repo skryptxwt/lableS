@@ -8,8 +8,8 @@ from PyQt5.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAbstractItemView, QColorDialog, QComboBox, QDesktopWidget, QHBoxLayout,
     QFrame, QGridLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPushButton, QSizePolicy, QSlider, QSpinBox,
-    QVBoxLayout, QWidget,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSlider,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
 from .class_styles import (
@@ -51,7 +51,7 @@ class ClassStylePreview(QWidget):
         self.text_size = DEFAULT_TEXT_SIZE
         self.text_position = DEFAULT_TEXT_POSITION
         self.setObjectName('classStylePreview')
-        self.setMinimumHeight(230)
+        self.setMinimumHeight(170)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_preview(self, name, style):
@@ -356,7 +356,22 @@ class modificationCls(QMainWindow):
         preview_heading.setFixedHeight(34)
         self.preview = ClassStylePreview(right)
 
-        color_panel = QFrame(right)
+        self.controls_scroll = QScrollArea(right)
+        self.controls_scroll.setObjectName('styleControlsScroll')
+        self.controls_scroll.setWidgetResizable(True)
+        self.controls_scroll.setFrameShape(QFrame.NoFrame)
+        self.controls_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff)
+        self.controls_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded)
+        self.controls_scroll.setMinimumHeight(220)
+        controls_content = QWidget(self.controls_scroll)
+        controls_content.setObjectName('styleControlsContent')
+        controls_layout = QVBoxLayout(controls_content)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(9)
+
+        color_panel = QFrame(controls_content)
         color_panel.setObjectName('styleControlsCard')
         color_layout = QVBoxLayout(color_panel)
         color_layout.setContentsMargins(14, 10, 14, 11)
@@ -381,7 +396,7 @@ class modificationCls(QMainWindow):
         color_layout.addWidget(self.handle_control)
         color_layout.addWidget(self.text_control)
 
-        geometry_panel = QFrame(right)
+        geometry_panel = QFrame(controls_content)
         geometry_panel.setObjectName('geometryCard')
         geometry_panel_layout = QVBoxLayout(geometry_panel)
         geometry_panel_layout.setContentsMargins(12, 8, 12, 9)
@@ -457,13 +472,20 @@ class modificationCls(QMainWindow):
         self.handle_size_spin.valueChanged.connect(self._style_changed)
         self.text_size_spin.valueChanged.connect(self._style_changed)
         self.text_position_combo.currentIndexChanged.connect(self._style_changed)
-        self.hint = QLabel('修改会实时预览；确认后保存，取消或关闭将撤销。', right)
+        self.hint = QLabel(
+            '修改会实时预览；确认后保存，取消或关闭将撤销。',
+            controls_content)
         self.hint.setStyleSheet('color: #667780; padding: 2px;')
         right_layout.addWidget(preview_heading)
-        right_layout.addWidget(self.preview, 1)
-        right_layout.addWidget(color_panel)
-        right_layout.addWidget(geometry_panel)
-        right_layout.addWidget(self.hint)
+        right_layout.addWidget(self.preview, 3)
+        controls_layout.addWidget(color_panel)
+        controls_layout.addWidget(geometry_panel)
+        controls_layout.addWidget(self.hint)
+        controls_layout.addStretch(1)
+        controls_content.setMinimumHeight(
+            max(365, controls_layout.sizeHint().height()))
+        self.controls_scroll.setWidget(controls_content)
+        right_layout.addWidget(self.controls_scroll, 4)
 
         action_row = QHBoxLayout()
         action_row.addStretch(1)
@@ -504,6 +526,12 @@ class modificationCls(QMainWindow):
             QWidget#classStylePreview {
                 border: 1px solid rgba(145, 159, 169, 125);
                 border-radius: 7px;
+            }
+            QScrollArea#styleControlsScroll,
+            QScrollArea#styleControlsScroll > QWidget > QWidget,
+            QWidget#styleControlsContent {
+                background: transparent;
+                border: 0;
             }
             QFrame#styleControlsCard {
                 background: rgba(247, 250, 252, 205);
