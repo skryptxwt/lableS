@@ -248,6 +248,10 @@ class MainWin(QMainWindow):
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self._refresh_after_resize)
+        self._obb_save_timer = QTimer(self)
+        self._obb_save_timer.setSingleShot(True)
+        self._obb_save_timer.setInterval(240)
+        self._obb_save_timer.timeout.connect(self._save_obb_wheel_change)
 
         # ———————————————————————————————— 初始化 ————————————————————————————————#
         self._apply_industrial_ui()
@@ -1962,6 +1966,28 @@ class MainWin(QMainWindow):
 
     # ———————————————————————————————— 鼠标滚轮事件 ————————————————————————————————#
     def wheelEvent(self, event):
+        if (self.arrows and self.img_is_load
+                and self.annotation_task == 'obb'
+                and self.is_choose_rect
+                and self.is_choose_rect_index is not None):
+            delta = event.angleDelta().y()
+            if not delta:
+                event.ignore()
+                return
+            step = 0.25 if event.modifiers() & Qt.ShiftModifier else 2.0
+            degrees = delta / 120.0 * step
+            index = self.is_choose_rect_index
+            label = self.img.rotate_obb_label(
+                self.img.label_save[index], degrees)
+            self.img.change_annotation(index, label)
+            self.rect_save_current = [index, -1, self.img.label_save[index]]
+            self._obb_save_timer.start()
+            angle = self.img.obb_angle(self.img.label_save[index])
+            self.statusBar().showMessage(
+                f'OBB ROTATION  |  {angle:.2f}°  '
+                '|  滚轮 2° / Shift+滚轮 0.25°')
+            event.accept()
+            return
         if self.arrows and self.img_is_load:
             if not self.wheel_pan_enabled:
                 event.ignore()
@@ -1969,7 +1995,6 @@ class MainWin(QMainWindow):
             self.img.is_trans = True
             self.move_xy(0, int(event.angleDelta().y() / 4))
             event.accept()
-
         elif self.hand and self.img_is_load:
             if not self.wheel_zoom_enabled:
                 event.ignore()
@@ -1985,6 +2010,10 @@ class MainWin(QMainWindow):
             self.img.is_trans = True
             self.move_xy()
             event.accept()
+
+    def _save_obb_wheel_change(self):
+        if self.img_is_load and self.annotation_task == 'obb':
+            self.img.save()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:

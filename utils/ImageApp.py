@@ -508,6 +508,32 @@ class Image(QMainWindow):
         return QPointF(midpoint.x() + dx / length * distance,
                        midpoint.y() + dy / length * distance)
 
+    @staticmethod
+    def rotate_obb_label(label, degrees):
+        """Rotate a YOLO OBB label around its center, preserving its size."""
+        if len(label) != 9:
+            raise ValueError('OBB 标签必须包含类别和 4 个角点')
+        points = [label[offset:offset + 2]
+                  for offset in range(1, len(label), 2)]
+        center_x = sum(point[0] for point in points) / 4
+        center_y = sum(point[1] for point in points) / 4
+        angle = math.radians(float(degrees))
+        cosine, sine = math.cos(angle), math.sin(angle)
+        rotated = []
+        for point in points:
+            px, py = point[0] - center_x, point[1] - center_y
+            rotated.extend((center_x + px * cosine - py * sine,
+                            center_y + px * sine + py * cosine))
+        return [int(label[0]), *rotated]
+
+    @staticmethod
+    def obb_angle(label):
+        if len(label) != 9:
+            return 0.0
+        angle = math.degrees(math.atan2(
+            label[4] - label[2], label[3] - label[1]))
+        return (angle + 180.0) % 360.0 - 180.0
+
     def task_hit_test(self, x, y, distance=10):
         """Return (kind, annotation index, control index) for non-box tasks."""
         for label_index in range(len(self.label_save) - 1, -1, -1):
@@ -821,7 +847,10 @@ class Image(QMainWindow):
             if cursor is not None:
                 path_points.append(QPointF(*cursor))
             if len(path_points) >= 2:
-                painter.drawPolyline(QPolygonF(path_points))
+                if self.task == 'obb' and cursor is None and len(path_points) == 4:
+                    painter.drawPolygon(QPolygonF(path_points))
+                else:
+                    painter.drawPolyline(QPolygonF(path_points))
             painter.setBrush(QColor(*style['handle']))
             for point in canvas_points:
                 painter.drawEllipse(point, 4, 4)

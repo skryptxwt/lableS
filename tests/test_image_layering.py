@@ -1,8 +1,10 @@
 import unittest
+import math
 from types import SimpleNamespace
-from PyQt5.QtCore import QPointF
+from PyQt5.QtCore import QPointF, Qt
 
 from utils.ImageApp import Image
+from utils.mainWindow import MainWin
 
 
 class FakeImage:
@@ -62,6 +64,77 @@ class ImageLayeringTest(unittest.TestCase):
 
         self.assertAlmostEqual(handle.x(), 60)
         self.assertLess(handle.y(), 20)
+
+    def test_rotate_obb_preserves_center_and_edge_lengths(self):
+        label = [0, 10, 20, 110, 20, 110, 80, 10, 80]
+
+        rotated = Image.rotate_obb_label(label, 90)
+        points = list(zip(rotated[1::2], rotated[2::2]))
+        center = (sum(point[0] for point in points) / 4,
+                  sum(point[1] for point in points) / 4)
+        first_edge = math.dist(points[0], points[1])
+        second_edge = math.dist(points[1], points[2])
+
+        self.assertEqual(rotated[0], 0)
+        self.assertAlmostEqual(center[0], 60)
+        self.assertAlmostEqual(center[1], 50)
+        self.assertAlmostEqual(first_edge, 100)
+        self.assertAlmostEqual(second_edge, 60)
+        self.assertAlmostEqual(Image.obb_angle(rotated), 90)
+
+    def test_rotate_obb_supports_fine_wheel_increment(self):
+        label = [0, 10, 20, 110, 20, 110, 80, 10, 80]
+
+        rotated = Image.rotate_obb_label(label, 0.25)
+
+        self.assertAlmostEqual(Image.obb_angle(rotated), 0.25)
+
+    def test_selected_obb_rotates_with_mouse_wheel(self):
+        class WheelImage:
+            rotate_obb_label = staticmethod(Image.rotate_obb_label)
+            obb_angle = staticmethod(Image.obb_angle)
+
+            def __init__(self):
+                self.label_save = [
+                    [0, 10, 20, 110, 20, 110, 80, 10, 80]
+                ]
+
+            def change_annotation(self, index, label):
+                self.label_save[index] = label
+
+        class WheelEvent:
+            accepted = False
+
+            @staticmethod
+            def angleDelta():
+                return SimpleNamespace(y=lambda: 120)
+
+            @staticmethod
+            def modifiers():
+                return Qt.NoModifier
+
+            def accept(self):
+                self.accepted = True
+
+        timer = SimpleNamespace(start=lambda: None)
+        status = SimpleNamespace(showMessage=lambda _message: None)
+        window = SimpleNamespace(
+            arrows=True,
+            img_is_load=True,
+            annotation_task='obb',
+            is_choose_rect=True,
+            is_choose_rect_index=0,
+            img=WheelImage(),
+            rect_save_current=None,
+            _obb_save_timer=timer,
+            statusBar=lambda: status,
+        )
+        event = WheelEvent()
+
+        MainWin.wheelEvent(window, event)
+
+        self.assertTrue(event.accepted)
+        self.assertAlmostEqual(Image.obb_angle(window.img.label_save[0]), 2)
 
     def test_task_hit_test_prefers_latest_overlapping_polygon(self):
         image = SimpleNamespace(
