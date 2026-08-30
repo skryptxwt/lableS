@@ -846,12 +846,13 @@ class MainWin(QMainWindow):
         hints = {
             'detect': '拖动绘制检测框；拖动框内部可整体移动',
             'segment': ('逐点单击绘制，单击起点、双击或 Enter 闭合；'
-                        '右键取消，选中后双击边线插入顶点'),
+                        '右键取消，Ctrl+单击边线插入顶点'),
             'obb': '拖动绘制旋转框；边中点调单边，上方圆点或滚轮旋转',
             'pose': f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；右键记为缺失',
         }
         self.statusBar().showMessage(
-            f'TASK {labels[task].upper()}  |  {hints[task]}')
+            f'TASK {labels[task].upper()}  |  {hints[task]}'
+            '  |  双击已有标注切换类别')
         return True
 
     def _reset_task_interaction(self):
@@ -1451,10 +1452,23 @@ class MainWin(QMainWindow):
                 else:
                     self.arrows_button_()
                 return True
+            if (event.type() == QEvent.MouseButtonDblClick
+                    and event.button() == Qt.LeftButton):
+                return self._task_event_filter(event)
             if self.hand:
                 return self._task_hand_event_filter(event)
             if self.arrows:
                 return self._task_event_filter(event)
+        if (self.img_is_load and self.annotation_task == 'detect'
+                and source is self.label
+                and event.type() == QEvent.MouseButtonDblClick
+                and event.button() == Qt.LeftButton):
+            position = self._event_canvas_pos(source, event)
+            hit_type, index, _control = self.img.hit_test(*position)
+            if hit_type is not None:
+                self._show_annotation_category_picker(
+                    index, source.mapToGlobal(event.pos()))
+            return True
         # 鼠标移动事件
         if event.type() == QEvent.MouseMove:
             # Mouse events are local to their source widget.  Convert them to
@@ -1488,6 +1502,8 @@ class MainWin(QMainWindow):
         # 点击左键
         if event.type() == QEvent.MouseButtonPress and event.type() != QEvent.MouseButtonDblClick:
             if event.button() == Qt.LeftButton:  # 鼠标左键按下, 双击也会触发
+                if self.temp_widget is not None:
+                    self.temp_widget.close()
                 self.temp_widget = None
 
                 if self.mouse_left_press is False and self.img_is_load:
@@ -1546,9 +1562,6 @@ class MainWin(QMainWindow):
             if event.button() == Qt.RightButton:
                 self.deleteBox_()
 
-        if event.type() == QEvent.MouseButtonPress and event.type() == QEvent.MouseButtonDblClick:
-            self.mouse_left_press = False
-
         # 释放
         if event.type() == QEvent.MouseButtonRelease:
             # 鼠标左键释放
@@ -1589,14 +1602,6 @@ class MainWin(QMainWindow):
                         self.is_choose_rect_index = self.rect_save_current[0]
                         self.is_choose_rect = True
                         self.move_xy(index=self.is_choose_rect_index)
-
-                        if not self.mouse_left_press:
-                            # 弹出类别框
-                            self.temp_widget = tempWidget(self, QListWidget())
-                            self.temp_widget.set_rect_cls(self.rect_save_current[2][0], 1)
-                            self.temp_widget.show()
-                            global_pos = source.mapToGlobal(event.pos())
-                            self.temp_widget.move(global_pos.x() + 100, global_pos.y())
 
                 self.categoryShowWidget.clear()
                 if self.is_choose_rect:
@@ -1650,19 +1655,14 @@ class MainWin(QMainWindow):
         self.mouse_pos = list(position)
 
         if event.type() == QEvent.MouseButtonDblClick:
-            if (event.button() == Qt.LeftButton
-                    and self.annotation_task == 'segment'):
-                if self.task_draft_points:
+            if event.button() == Qt.LeftButton:
+                if self.annotation_task == 'segment' and self.task_draft_points:
                     self._finish_segment()
-                else:
-                    selected = (self.is_choose_rect_index
-                                if self.is_choose_rect else None)
-                    edge_hit = self.img.segment_edge_hit_test(
-                        *position, annotation_index=selected)
-                    if edge_hit is None and selected is not None:
-                        edge_hit = self.img.segment_edge_hit_test(*position)
-                    if edge_hit is not None:
-                        self._insert_segment_vertex(edge_hit)
+                    return True
+                hit = self.img.task_hit_test(*position)
+                if hit[0] is not None:
+                    global_pos = self.label.mapToGlobal(event.pos())
+                    self._show_annotation_category_picker(hit[1], global_pos)
                 return True
 
         if event.type() == QEvent.MouseButtonPress:
@@ -1686,6 +1686,16 @@ class MainWin(QMainWindow):
                         self.img.new_xy_to_org_xy(position))
                     self._redraw_task_draft(cursor=position)
                     return True
+                if event.modifiers() & Qt.ControlModifier:
+                    selected = (self.is_choose_rect_index
+                                if self.is_choose_rect else None)
+                    edge_hit = self.img.segment_edge_hit_test(
+                        *position, annotation_index=selected)
+                    if edge_hit is None and selected is not None:
+                        edge_hit = self.img.segment_edge_hit_test(*position)
+                    if edge_hit is not None:
+                        self._insert_segment_vertex(edge_hit)
+                        return True
                 hit = self.img.task_hit_test(*position)
                 if hit[0] is None:
                     self._clear_task_selection()
@@ -1791,6 +1801,31 @@ class MainWin(QMainWindow):
         self.categoryShowWidget.set_rect_cls(
             self.img.label_save[index][0], index)
         self.move_xy(index=index)
+
+    def _show_annotation_category_picker(self, index, global_position):
+        """Select an annotation and show the shared class picker beside it."""
+        if not (self.img_is_load and 0 <= index < len(self.img.label_save)):
+            return False
+        if self.annotation_task == 'detect':
+            self.is_choose_rect = True
+            self.is_choose_rect_index = index
+            self.is_hover_move_allow = True
+            self.rect_save_current = [index, -1, self.img.label_save[index]]
+            self.cls = int(self.img.label_save[index][0])
+            self.move_xy(index=index)
+            self.boxShowWidget.set_rect_box(index)
+            self.categoryShowWidget.set_rect_cls(self.cls, index)
+        else:
+            self._select_task_annotation(index)
+            self.cls = int(self.img.label_save[index][0])
+        if self.temp_widget is not None:
+            self.temp_widget.close()
+        self.temp_widget = tempWidget(self, QListWidget())
+        self.temp_widget.set_rect_cls(self.cls, index)
+        self.temp_widget.show()
+        self.temp_widget.move(global_position.x() + 12,
+                              global_position.y() + 12)
+        return True
 
     def _begin_task_edit(self, hit, position):
         kind, index, control = hit

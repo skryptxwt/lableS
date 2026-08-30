@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtWidgets import QComboBox, QSpinBox
 
 from utils import mainWindow as main_window_module
@@ -245,6 +245,60 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual(redraws, [True])
         self.assertEqual(cursors, [Qt.CrossCursor])
         self.assertIn('已取消当前绘制', messages[-1])
+
+    def test_double_click_opens_category_picker_for_every_task(self):
+        opened = []
+
+        class DoubleClickEvent:
+            @staticmethod
+            def type():
+                return QEvent.MouseButtonDblClick
+
+            @staticmethod
+            def button():
+                return Qt.LeftButton
+
+            @staticmethod
+            def pos():
+                return QPoint(30, 40)
+
+        label = SimpleNamespace(
+            mapToGlobal=lambda point: QPoint(point.x() + 100,
+                                             point.y() + 200))
+        image = SimpleNamespace(
+            task_hit_test=lambda x, y: ('shape', 2, -1),
+            hit_test=lambda x, y: ('rect', 2, -1),
+        )
+        event = DoubleClickEvent()
+        for task in ('segment', 'obb', 'pose'):
+            window = SimpleNamespace(
+                annotation_task=task,
+                task_draft_points=[],
+                label=label,
+                img=image,
+                mouse_pos=None,
+                _event_canvas_pos=lambda source, current_event: (30, 40),
+                _show_annotation_category_picker=(
+                    lambda index, position, current=task:
+                    opened.append((current, index, position))),
+            )
+            MainWin._task_event_filter(window, event)
+
+        detect_window = SimpleNamespace(
+            change_label_name=False,
+            img_is_load=True,
+            annotation_task='detect',
+            label=label,
+            img=image,
+            _event_canvas_pos=lambda source, current_event: (30, 40),
+            _show_annotation_category_picker=(
+                lambda index, position: opened.append(
+                    ('detect', index, position))),
+        )
+        MainWin.eventFilter(detect_window, label, event)
+
+        self.assertEqual([entry[:2] for entry in opened], [
+            ('segment', 2), ('obb', 2), ('pose', 2), ('detect', 2)])
 
 
 if __name__ == '__main__':
