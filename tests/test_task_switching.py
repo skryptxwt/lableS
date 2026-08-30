@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -14,6 +15,37 @@ from utils.tempCatewidget import CategoryApp as CategoryPopup
 
 
 class TaskSwitchingTest(unittest.TestCase):
+    def test_label_task_detection_supports_unique_and_ambiguous_formats(self):
+        paths = []
+
+        def write_label(text):
+            file = tempfile.NamedTemporaryFile(
+                mode='w', suffix='.txt', encoding='utf-8', delete=False)
+            with file:
+                file.write(text)
+            path = Path(file.name)
+            paths.append(path)
+            return path
+
+        try:
+            detect = write_label('0 0.5 0.5 0.2 0.3\n')
+            segment = write_label('0 0.1 0.1 0.9 0.1 0.5 0.8\n')
+            obb_or_segment = write_label(
+                '0 0.1 0.1 0.9 0.1 0.9 0.8 0.1 0.8\n')
+
+            self.assertEqual(
+                MainWin._compatible_label_tasks(detect, (17, 3)),
+                ['detect'])
+            self.assertEqual(
+                MainWin._compatible_label_tasks(segment, (17, 3)),
+                ['segment'])
+            self.assertEqual(
+                MainWin._compatible_label_tasks(obb_or_segment, (17, 3)),
+                ['segment', 'obb'])
+        finally:
+            for path in paths:
+                path.unlink(missing_ok=True)
+
     def test_selected_object_row_shows_its_own_delete_button(self):
         app = QApplication.instance() or QApplication([])
         deleted = []
