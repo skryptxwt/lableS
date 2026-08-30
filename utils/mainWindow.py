@@ -196,6 +196,7 @@ class MainWin(QMainWindow):
         self.task_edit = None
         self.detect_drag_original = None
         self.detect_drag_start_org = None
+        self._ignore_left_release = False
 
         self.is_update_label = False  # 是否正在更新框的label
         self.is_update_label_save = None  # 保存更新框的label的信息 [box_index, img.label_save[index], img.basedata[index]]
@@ -908,13 +909,14 @@ class MainWin(QMainWindow):
         hints = {
             'detect': '拖动绘制检测框；拖动框内部可整体移动',
             'segment': ('逐点单击绘制，单击起点、双击或 Enter 闭合；'
-                        '右键取消，Ctrl+单击边线插入顶点'),
+                        'Ctrl+单击边线插入顶点'),
             'obb': '拖动绘制旋转框；边中点调单边，上方圆点或滚轮旋转',
-            'pose': f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；右键记为缺失',
+            'pose': (f'先拖动目标框，再依次标记 {self.kpt_shape[0]} 个关键点；'
+                     'Shift+左键=遮挡，Alt+左键=缺失'),
         }
         self.statusBar().showMessage(
             f'TASK {labels[task].upper()}  |  {hints[task]}'
-            '  |  双击已有标注切换类别')
+            '  |  绘制中右键 / Esc 取消  |  双击已有标注切换类别')
         return True
 
     def _reset_task_interaction(self):
@@ -930,6 +932,7 @@ class MainWin(QMainWindow):
         self.task_edit = None
         self.detect_drag_original = None
         self.detect_drag_start_org = None
+        self._ignore_left_release = False
         self.is_add_box = False
         self.is_update_label = False
         self.is_choose_rect = False
@@ -1394,6 +1397,7 @@ class MainWin(QMainWindow):
         self.mouse_press_pos, self.mouse_left_press, self.mouse_right_press = None, False, False
         self.detect_drag_original = None
         self.detect_drag_start_org = None
+        self._ignore_left_release = False
 
         self.label_list.clear()
         self.label_list_only_name.clear()
@@ -1588,7 +1592,9 @@ class MainWin(QMainWindow):
                         # 按下鼠标左键时，更新label
                         self.is_add_box = False
                         self.is_update_label = True
-                        self.detect_drag_original = None
+                        index = self.rect_save_current[0]
+                        self.detect_drag_original = list(
+                            self.img.label_save[index])
                         self.detect_drag_start_org = None
 
                     elif self.arrows and self.hover:
@@ -1626,12 +1632,17 @@ class MainWin(QMainWindow):
                         self.is_add_box = True
 
             if event.button() == Qt.RightButton:
-                self.deleteBox_()
+                if not self._cancel_current_annotation():
+                    self.deleteBox_()
+                return True
 
         # 释放
         if event.type() == QEvent.MouseButtonRelease:
             # 鼠标左键释放
             if event.button() == Qt.LeftButton:
+                if self._ignore_left_release:
+                    self._ignore_left_release = False
+                    return True
                 if not self.img_is_load:
                     return False
 
@@ -1736,11 +1747,9 @@ class MainWin(QMainWindow):
         if event.type() == QEvent.MouseButtonPress:
             self._cancel_interaction_redraw()
             if event.button() == Qt.RightButton:
-                if self.annotation_task == 'segment' and self.task_draft_points:
-                    self._cancel_segment_draft()
-                elif self.annotation_task == 'pose' and self.task_pose_bbox:
-                    self._append_pose_point(None, visibility=0)
-                elif self.is_choose_rect:
+                if self._cancel_current_annotation():
+                    return True
+                if self.is_choose_rect:
                     self.deleteBox_()
                 return True
             if event.button() != Qt.LeftButton or not self.pos_in_org(position):
@@ -1776,8 +1785,12 @@ class MainWin(QMainWindow):
                 return True
 
             if self.annotation_task == 'pose' and self.task_pose_bbox:
-                visibility = 1 if event.modifiers() & Qt.ShiftModifier else 2
-                self._append_pose_point(position, visibility)
+                if event.modifiers() & Qt.AltModifier:
+                    self._append_pose_point(None, visibility=0)
+                else:
+                    visibility = (1 if event.modifiers() & Qt.ShiftModifier
+                                  else 2)
+                    self._append_pose_point(position, visibility)
                 return True
 
             hit = self.img.task_hit_test(*position)
@@ -1835,6 +1848,9 @@ class MainWin(QMainWindow):
             return True
 
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self._ignore_left_release:
+                self._ignore_left_release = False
+                return True
             self._interaction_redraw_timer.stop()
             self._flush_interaction_redraw()
             if self.task_edit is not None:
@@ -2035,7 +2051,7 @@ class MainWin(QMainWindow):
             self.statusBar().showMessage(
                 f'POSE  |  1 / {self.kpt_shape[0]}  '
                 f'{self._pose_point_name(0)}  '
-                '|  Shift+左键=遮挡，右键=缺失')
+                '|  Shift+左键=遮挡，Alt+左键=缺失，右键/Esc=取消')
 
     @staticmethod
     def _square_drag_end(start, end):
@@ -2109,6 +2125,99 @@ class MainWin(QMainWindow):
         self.statusBar().showMessage('SEGMENT  |  已取消当前绘制')
         return True
 
+    def _cancel_current_annotation(self):
+        """Cancel any unfinished draw/edit without touching saved labels."""
+        active = bool(
+            self.task_draft_points
+            or self.task_pose_bbox is not None
+            or self.task_pose_points
+            or self.task_drag is not None
+            or self.task_edit is not None
+            or self.is_add_box
+            or self.is_update_label
+        )
+        if not active:
+            return False
+
+        suppress_left_release = bool(self.mouse_left_press)
+        self._cancel_interaction_redraw()
+        restore_index = None
+
+        # Non-detect edits update the in-memory annotation while dragging.
+        # Restore the press-time snapshot instead of leaving a half edit.
+        if self.task_edit is not None:
+            edit = self.task_edit
+            index = edit.get('index')
+            if (isinstance(index, int)
+                    and 0 <= index < len(self.img.label_save)):
+                self.img.change_annotation(
+                    index, list(edit['original']), redraw=False)
+                restore_index = index
+
+        # Detect box moves/resizes follow the same live-update pattern.
+        if (self.is_update_label
+                and self.detect_drag_original is not None):
+            index = self.is_choose_rect_index
+            if (isinstance(index, int)
+                    and 0 <= index < len(self.img.label_save)):
+                self.img.change(
+                    index, list(self.detect_drag_original), redraw=False)
+                restore_index = index
+
+        # A new detect box is inserted on the first move but is not saved until
+        # release. Remove only that temporary item when the gesture is cancelled.
+        if self.is_add_box and not self.is_first_add_box:
+            index = self.is_choose_rect_index
+            if (isinstance(index, int)
+                    and 0 <= index < len(self.img.label_save)):
+                self.img.pop(index)
+                self.len_rect = len(self.img.label_save)
+
+        self.task_draft_points = []
+        self.task_pose_bbox = None
+        self.task_pose_points = []
+        self.task_drag = None
+        self.task_edit = None
+        self.detect_drag_original = None
+        self.detect_drag_start_org = None
+        self.is_add_box = False
+        self.is_update_label = False
+        self.is_first_add_box = True
+        self.is_first_update_label = True
+        self.mouse_left_press = False
+        self.mouse_save_temp = None
+        self.hand_flag = False
+        self.rect_save = None
+        self.cross = False
+        self.hover = False
+        self._ignore_left_release = suppress_left_release
+        self.img.only_index = False
+
+        if (restore_index is not None
+                and restore_index < len(self.img.label_save)):
+            self.is_choose_rect = True
+            self.is_choose_rect_index = restore_index
+            self.rect_save_current = [
+                restore_index, -1, self.img.label_save[restore_index]]
+            self.move_xy(index=restore_index)
+            self.categoryShowWidget.set_rect_cls(
+                self.img.label_save[restore_index][0], restore_index)
+            self.boxShowWidget.set_rect_box(restore_index)
+        else:
+            self.is_choose_rect = False
+            self.is_choose_rect_index = None
+            self.is_hover_move_allow = False
+            self.rect_save_current = None
+            self.categoryShowWidget.clear()
+            self.boxShowWidget.clear()
+            self.move_xy()
+
+        self.setCursor(Qt.CrossCursor if self.annotation_task == 'segment'
+                       else Qt.ArrowCursor)
+        self.statusBar().showMessage(
+            f'{self.annotation_task.upper()}  |  已取消当前操作')
+        return True
+
     def _insert_segment_vertex(self, edge_hit):
         """Insert a projected vertex after the selected polygon edge."""
         index, edge_index, canvas_point = edge_hit
@@ -2171,7 +2280,7 @@ class MainWin(QMainWindow):
             self.statusBar().showMessage(
                 f'POSE  |  {count + 1} / {self.kpt_shape[0]}  '
                 f'{self._pose_point_name(count)}  '
-                '|  Shift+左键=遮挡，右键=缺失')
+                '|  Shift+左键=遮挡，Alt+左键=缺失，右键/Esc=取消')
 
     def _redraw_task_drag(self):
         frame = self.img.overlay_frame()
@@ -2289,6 +2398,10 @@ class MainWin(QMainWindow):
             self._sync_tool_mode_buttons()
 
     def keyPressEvent(self, event):
+        if (self.img_is_load and event.key() == Qt.Key_Escape
+                and self._cancel_current_annotation()):
+            event.accept()
+            return
         if self.img_is_load and self.annotation_task != 'detect':
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if self.annotation_task == 'segment' and self.task_draft_points:
@@ -2306,18 +2419,6 @@ class MainWin(QMainWindow):
                     self._redraw_task_draft()
                     event.accept()
                     return
-            if event.key() == Qt.Key_Escape:
-                self._cancel_interaction_redraw()
-                self.task_draft_points = []
-                self.task_pose_bbox = None
-                self.task_pose_points = []
-                self.task_drag = None
-                self.task_edit = None
-                self.mouse_left_press = False
-                self.move_xy(index=self.is_choose_rect_index)
-                self.statusBar().showMessage('ANNOTATION CANCELLED')
-                event.accept()
-                return
         if self.img_is_load and event.modifiers() & Qt.ControlModifier:
             # Ctrl键被按下 event.modifiers()是一个int类型的值, 用来判断Ctrl键是否被按下
             self.temp_hand, self.key_press, self.hand = True, True, True

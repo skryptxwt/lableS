@@ -295,6 +295,131 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual(cursors, [Qt.CrossCursor])
         self.assertIn('已取消当前绘制', messages[-1])
 
+    def test_cancel_pose_draft_discards_bbox_and_keypoints(self):
+        messages = []
+        redraws = []
+        image = SimpleNamespace(label_save=[], only_index=True)
+        empty_panel = SimpleNamespace(clear=lambda: None)
+        window = SimpleNamespace(
+            task_draft_points=[],
+            task_pose_bbox=[10, 20, 110, 180],
+            task_pose_points=[[30, 40, 2], [50, 60, 1]],
+            task_drag=None,
+            task_edit=None,
+            is_add_box=False,
+            is_update_label=False,
+            is_first_add_box=True,
+            is_first_update_label=True,
+            detect_drag_original=None,
+            detect_drag_start_org=None,
+            mouse_left_press=False,
+            mouse_save_temp=None,
+            hand_flag=False,
+            rect_save=None,
+            rect_save_current=None,
+            cross=False,
+            hover=False,
+            is_choose_rect=False,
+            is_choose_rect_index=None,
+            is_hover_move_allow=False,
+            len_rect=0,
+            annotation_task='pose',
+            img=image,
+            categoryShowWidget=empty_panel,
+            boxShowWidget=empty_panel,
+            _cancel_interaction_redraw=lambda: None,
+            move_xy=lambda *args, **kwargs: redraws.append((args, kwargs)),
+            setCursor=lambda cursor: None,
+            statusBar=lambda: SimpleNamespace(
+                showMessage=lambda message, _timeout=0: messages.append(message)),
+        )
+
+        cancelled = MainWin._cancel_current_annotation(window)
+
+        self.assertTrue(cancelled)
+        self.assertIsNone(window.task_pose_bbox)
+        self.assertEqual(window.task_pose_points, [])
+        self.assertFalse(window._ignore_left_release)
+        self.assertFalse(image.only_index)
+        self.assertEqual(len(redraws), 1)
+        self.assertIn('已取消当前操作', messages[-1])
+
+    def test_cancel_detect_draft_removes_only_unsaved_box(self):
+        popped = []
+
+        class DraftImage:
+            def __init__(self):
+                self.label_save = [[2, 10, 20, 100, 120]]
+                self.only_index = True
+
+            def pop(self, index):
+                popped.append(index)
+                self.label_save.pop(index)
+
+        empty_panel = SimpleNamespace(clear=lambda: None)
+        image = DraftImage()
+        window = SimpleNamespace(
+            task_draft_points=[], task_pose_bbox=None,
+            task_pose_points=[], task_drag=None, task_edit=None,
+            is_add_box=True, is_update_label=False,
+            is_first_add_box=False, is_first_update_label=True,
+            detect_drag_original=None, detect_drag_start_org=None,
+            mouse_left_press=True, mouse_save_temp=(20, 30), hand_flag=False,
+            rect_save=None, rect_save_current=[0, -1, image.label_save[0]],
+            cross=False, hover=False, is_choose_rect=True,
+            is_choose_rect_index=0, is_hover_move_allow=False,
+            len_rect=1, annotation_task='detect', img=image,
+            categoryShowWidget=empty_panel, boxShowWidget=empty_panel,
+            _cancel_interaction_redraw=lambda: None,
+            move_xy=lambda *args, **kwargs: None,
+            setCursor=lambda cursor: None,
+            statusBar=lambda: SimpleNamespace(showMessage=lambda *args: None),
+        )
+
+        cancelled = MainWin._cancel_current_annotation(window)
+
+        self.assertTrue(cancelled)
+        self.assertEqual(popped, [0])
+        self.assertEqual(image.label_save, [])
+        self.assertEqual(window.len_rect, 0)
+        self.assertTrue(window._ignore_left_release)
+        self.assertFalse(window.is_add_box)
+
+    def test_escape_uses_shared_annotation_cancel(self):
+        accepted = []
+        event = SimpleNamespace(
+            key=lambda: Qt.Key_Escape,
+            accept=lambda: accepted.append(True),
+        )
+        window = SimpleNamespace(
+            img_is_load=True,
+            _cancel_current_annotation=lambda: True,
+        )
+
+        MainWin.keyPressEvent(window, event)
+
+        self.assertEqual(accepted, [True])
+
+    def test_pose_right_click_uses_shared_cancel_before_delete(self):
+        actions = []
+        event = SimpleNamespace(
+            type=lambda: QEvent.MouseButtonPress,
+            button=lambda: Qt.RightButton,
+        )
+        window = SimpleNamespace(
+            label=object(), mouse_pos=None,
+            _event_canvas_pos=lambda source, current_event: (30, 40),
+            _cancel_interaction_redraw=lambda: actions.append('stop'),
+            _cancel_current_annotation=lambda: actions.append('cancel') or True,
+            is_choose_rect=True,
+            deleteBox_=lambda: actions.append('delete'),
+        )
+
+        handled = MainWin._task_event_filter(window, event)
+
+        self.assertTrue(handled)
+        self.assertEqual(actions, ['stop', 'cancel'])
+
     def test_double_click_opens_category_picker_for_every_task(self):
         opened = []
 
