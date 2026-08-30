@@ -379,7 +379,8 @@ QWidget#hoverSliderPopup {
 QMenu#backgroundMenu,
 QMenu#modelMenu,
 QMenu#shortcutMenu,
-QMenu#taskMenu {
+QMenu#taskMenu,
+QMenu#operationsMenu {
     color: #303b43;
     background: #f7f8f9;
     border: 1px solid #b8c1c7;
@@ -393,7 +394,8 @@ QMenu#taskMenu {
 QMenu#backgroundMenu::item,
 QMenu#modelMenu::item,
 QMenu#shortcutMenu::item,
-QMenu#taskMenu::item {
+QMenu#taskMenu::item,
+QMenu#operationsMenu::item {
     min-height: 28px;
     padding: 2px 24px 2px 10px;
     border-radius: 4px;
@@ -403,7 +405,8 @@ QMenu#taskMenu::item {
 QMenu#backgroundMenu::item:selected,
 QMenu#modelMenu::item:selected,
 QMenu#shortcutMenu::item:selected,
-QMenu#taskMenu::item:selected {
+QMenu#taskMenu::item:selected,
+QMenu#operationsMenu::item:selected {
     color: #18242c;
     background: #e3e8eb;
 }
@@ -411,10 +414,53 @@ QMenu#taskMenu::item:selected {
 QMenu#backgroundMenu::separator,
 QMenu#modelMenu::separator,
 QMenu#shortcutMenu::separator,
-QMenu#taskMenu::separator {
+QMenu#taskMenu::separator,
+QMenu#operationsMenu::separator {
     height: 1px;
     margin: 4px 8px;
     background: #d2d8dc;
+}
+
+QWidget#operationGuidePanel {
+    color: #26343e;
+    background: #f7f8f9;
+    border: 0;
+}
+
+QLabel[role="guideHeading"] {
+    color: #60717c;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px 3px 5px;
+}
+
+QWidget[role="guideRow"] {
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+}
+
+QWidget[role="guideRow"]:hover {
+    background: #e8edf0;
+}
+
+QLabel[role="guideGesture"] {
+    color: #243640;
+    font-family: "Microsoft YaHei UI";
+    font-size: 11px;
+    font-weight: 500;
+}
+
+QLabel[role="guideDescription"] {
+    color: #667680;
+    font-family: "Microsoft YaHei UI";
+    font-size: 11px;
+    font-weight: 400;
+}
+
+QWidget#operationGuideSeparator {
+    background: #d6dde1;
+    border: 0;
 }
 
 QWidget#backgroundOpacityMenu,

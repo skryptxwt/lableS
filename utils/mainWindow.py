@@ -429,6 +429,14 @@ class MainWin(QMainWindow):
         self.ui.detect.setVisible(False)
         self.ui.save_5.setText('快捷键  ▾')
         self.ui.save_2.setVisible(False)  # 尚未接入的入口不在生产界面中展示
+        self.operations_button = QPushButton('操作  ▾', self)
+        self.operations_button.setObjectName('operationsButton')
+        self.operations_button.setFixedSize(62, 24)
+        self.operations_button.setProperty('toolbarControl', True)
+        self.operations_button.setToolTip('查看当前任务的鼠标与键盘操作')
+        self.operations_button.clicked.connect(self.show_operations_menu)
+        self.operations_menu = QMenu(self)
+        self.operations_menu.setObjectName('operationsMenu')
         self.background_button = QPushButton('窗口  ▾', self)
         self.background_button.setObjectName('backgroundButton')
         self.background_button.setFixedSize(62, 24)
@@ -648,6 +656,7 @@ class MainWin(QMainWindow):
             self.ui.renewCls: 66,
             self.ui.load_model: 82,
             self.ui.save_5: 78,
+            self.operations_button: 62,
             self.task_button: 88,
             self.background_button: 62,
         }
@@ -661,6 +670,7 @@ class MainWin(QMainWindow):
             self.task_button,
             self.ui.load_model,
             self.background_button,
+            self.operations_button,
             self.ui.save_5,
         )
 
@@ -820,6 +830,7 @@ class MainWin(QMainWindow):
             self.imgUP: '放大画布', self.imgDOWN: '缩小画布',
             self.resetShowImg: '重置画布', self.cls_color: '设置类别颜色',
             self.deleteBox: '删除当前选中的标注框', self.detect: '使用当前模型检测当前图片',
+            self.operations_button: '查看当前任务的常规操作',
             self.ui.save_5: '配置快捷键与鼠标滚轮操作',
         }
         for widget, tooltip in tooltips.items():
@@ -955,6 +966,95 @@ class MainWin(QMainWindow):
             self.task_button.rect().bottomLeft())
         position.setY(position.y() + 5)
         self.task_menu.popup(position)
+
+    def _operation_guide_sections(self):
+        shortcut = lambda key: self.shortcut_bindings.get(key, '') or '已禁用'
+        common = [
+            ('双击已有标注', '切换该标注的类别'),
+            ('绘制中右键 / Esc', '取消当前操作'),
+            (f'选中后右键 / {shortcut("delete_box")}', '删除当前标注'),
+            (shortcut('undo'), '撤销上一步标注操作'),
+            (shortcut('redo'), '恢复已撤销的标注操作'),
+            ('鼠标中键', '切换选择与平移工具'),
+        ]
+        task_rows = {
+            'detect': [
+                ('空白处左键拖动', '创建检测框'),
+                ('拖动框内部', '移动检测框'),
+                ('拖动边角锚点', '调整检测框大小'),
+            ],
+            'segment': [
+                ('依次单击画布', '添加分割轮廓点'),
+                ('单击起点 / 双击 / Enter', '闭合并保存轮廓'),
+                (f'悬停边线 + {shortcut("insert_segment_vertex")}',
+                 '在已有轮廓中插入新点'),
+                ('拖动顶点或轮廓内部', '调整顶点或移动轮廓'),
+            ],
+            'obb': [
+                ('空白处左键拖动', '创建 OBB 旋转框'),
+                ('Shift + 拖动', '创建正方形旋转框'),
+                ('拖动角点 / 边中点', '调整尺寸或单边距离'),
+                ('选中后滚轮', '旋转 2°；Shift + 滚轮微调 0.25°'),
+            ],
+            'pose': [
+                ('先拖动目标区域', '创建关键点边界框'),
+                ('随后依次单击', '标记各个关键点'),
+                ('Shift / Alt + 左键', '标记遮挡点 / 缺失点'),
+                ('拖动框或关键点', '移动目标或调整关键点'),
+            ],
+        }
+        task_titles = {
+            'detect': '检测框', 'segment': '实例分割',
+            'obb': 'OBB 旋转框', 'pose': '关键点',
+        }
+        task = self.annotation_task
+        return [('常规操作', common),
+                (task_titles.get(task, task), task_rows.get(task, []))]
+
+    def _rebuild_operations_menu(self):
+        self.operations_menu.clear()
+        panel = QWidget(self.operations_menu)
+        panel.setObjectName('operationGuidePanel')
+        panel.setFixedWidth(390)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 11, 14, 12)
+        layout.setSpacing(4)
+        for section_index, (title, rows) in enumerate(
+                self._operation_guide_sections()):
+            if section_index:
+                separator = QWidget(panel)
+                separator.setObjectName('operationGuideSeparator')
+                separator.setFixedHeight(1)
+                layout.addSpacing(5)
+                layout.addWidget(separator)
+                layout.addSpacing(4)
+            heading = QLabel(title, panel)
+            heading.setProperty('role', 'guideHeading')
+            layout.addWidget(heading)
+            for gesture, description in rows:
+                row = QWidget(panel)
+                row.setProperty('role', 'guideRow')
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(7, 3, 7, 3)
+                row_layout.setSpacing(12)
+                gesture_label = QLabel(gesture, row)
+                gesture_label.setProperty('role', 'guideGesture')
+                gesture_label.setMinimumWidth(165)
+                description_label = QLabel(description, row)
+                description_label.setProperty('role', 'guideDescription')
+                row_layout.addWidget(gesture_label)
+                row_layout.addWidget(description_label, 1)
+                layout.addWidget(row)
+        action = QWidgetAction(self.operations_menu)
+        action.setDefaultWidget(panel)
+        self.operations_menu.addAction(action)
+
+    def show_operations_menu(self):
+        self._rebuild_operations_menu()
+        position = self.operations_button.mapToGlobal(
+            self.operations_button.rect().bottomLeft())
+        position.setY(position.y() + 5)
+        self.operations_menu.popup(position)
 
     def set_annotation_task(self, task, persist=True, reload_image=True):
         labels = {

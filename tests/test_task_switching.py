@@ -15,6 +15,32 @@ from utils.tempCatewidget import CategoryApp as CategoryPopup
 
 
 class TaskSwitchingTest(unittest.TestCase):
+    def test_operation_guide_tracks_task_and_configured_shortcuts(self):
+        window = SimpleNamespace(
+            annotation_task='segment',
+            shortcut_bindings={
+                'delete_box': 'Ctrl+Delete',
+                'undo': 'Alt+Z',
+                'redo': 'Alt+Y',
+                'insert_segment_vertex': 'Ctrl+I',
+            },
+        )
+
+        sections = MainWin._operation_guide_sections(window)
+
+        self.assertEqual([title for title, _rows in sections], [
+            '常规操作', '实例分割'])
+        common_text = ' '.join(
+            f'{gesture} {description}' for gesture, description in sections[0][1])
+        segment_text = ' '.join(
+            f'{gesture} {description}' for gesture, description in sections[1][1])
+        self.assertIn('Ctrl+Delete', common_text)
+        self.assertIn('Alt+Z', common_text)
+        self.assertIn('Alt+Y', common_text)
+        self.assertIn('Ctrl+I', segment_text)
+        self.assertIn('双击', common_text)
+        self.assertIn('右键 / Esc', common_text)
+
     def test_label_task_detection_supports_unique_and_ambiguous_formats(self):
         paths = []
 
