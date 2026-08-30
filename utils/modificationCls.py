@@ -145,6 +145,43 @@ class ClassStylePreview(QWidget):
         painter.drawText(text_rect, alignment, self.class_name)
 
 
+class ColorSwatchButton(QPushButton):
+    """Compact color well used by the class-style property rows."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._color = QColor('#249bc8')
+        self.setObjectName('styleColorButton')
+        self.setFixedSize(38, 28)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip('选择颜色')
+
+    def set_color(self, color):
+        self._color = QColor(color)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        outer = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
+        if self.isDown():
+            surface = QColor('#e1e7eb')
+        elif self.underMouse():
+            surface = QColor('#ffffff')
+        else:
+            surface = QColor('#f7f9fa')
+        outline = QColor('#249bc8') if self.hasFocus() else QColor('#aeb9c1')
+        painter.setPen(QPen(outline, 1))
+        painter.setBrush(surface)
+        painter.drawRoundedRect(outer, 6, 6)
+
+        swatch = outer.adjusted(5, 5, -5, -5)
+        painter.setPen(QPen(self._color.darker(125), .8))
+        painter.setBrush(self._color)
+        painter.drawRoundedRect(swatch, 3, 3)
+        painter.end()
+
+
 class StyleControl(QWidget):
     colorChanged = pyqtSignal(QColor)
     opacityChanged = pyqtSignal(int)
@@ -152,29 +189,36 @@ class StyleControl(QWidget):
 
     def __init__(self, title, parent=None):
         super().__init__(parent)
+        self.setObjectName('styleControlRow')
+        self.setFixedHeight(34)
         self.color = QColor('#249bc8')
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(9)
 
         title_label = QLabel(title, self)
         title_label.setObjectName('styleControlTitle')
-        title_label.setFixedWidth(66)
-        self.color_button = QPushButton('选择颜色', self)
-        self.color_button.setFixedWidth(88)
+        title_label.setFixedWidth(70)
+        self.color_button = ColorSwatchButton(self)
         self.color_button.clicked.connect(self._choose_color)
+        self.color_value = QLabel('#249BC8', self)
+        self.color_value.setObjectName('styleColorValue')
+        self.color_value.setFixedWidth(62)
+        self.color_value.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.opacity_slider = QSlider(Qt.Horizontal, self)
         self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setProperty('menuSlider', True)
+        self.opacity_slider.setProperty('styleControlSlider', True)
         self.opacity_value = QLabel('100%', self)
+        self.opacity_value.setObjectName('styleOpacityValue')
         self.opacity_value.setFixedWidth(38)
-        self.opacity_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.opacity_value.setAlignment(Qt.AlignCenter)
         self.opacity_slider.valueChanged.connect(self._opacity_changed)
         self.opacity_slider.sliderReleased.connect(
             self.opacityEditingFinished.emit)
 
         layout.addWidget(title_label)
         layout.addWidget(self.color_button)
+        layout.addWidget(self.color_value)
         layout.addWidget(self.opacity_slider, 1)
         layout.addWidget(self.opacity_value)
 
@@ -199,17 +243,8 @@ class StyleControl(QWidget):
         self.colorChanged.emit(color)
 
     def _update_swatch(self):
-        border = self.color.darker(115).name()
-        self.color_button.setStyleSheet(
-            'QPushButton {'
-            'background: rgba(250, 252, 253, 232); color: #293943; '
-            f'border: 1px solid #a8b4bc; border-left: 7px solid {border}; '
-            'border-radius: 5px; padding: 0 8px;'
-            '}'
-            'QPushButton:hover {'
-            f'background: {self.color.lighter(190).name()}; '
-            f'border-color: {border};'
-            '}')
+        self.color_button.set_color(self.color)
+        self.color_value.setText(self.color.name().upper())
 
     def _opacity_changed(self, value):
         self.opacity_value.setText(f'{value}%')
@@ -324,15 +359,23 @@ class modificationCls(QMainWindow):
         color_panel = QFrame(right)
         color_panel.setObjectName('styleControlsCard')
         color_layout = QVBoxLayout(color_panel)
-        color_layout.setContentsMargins(12, 8, 12, 10)
-        color_layout.setSpacing(5)
+        color_layout.setContentsMargins(14, 10, 14, 11)
+        color_layout.setSpacing(3)
+        color_header = QHBoxLayout()
+        color_header.setContentsMargins(0, 0, 0, 2)
+        color_header.setSpacing(8)
         color_heading = QLabel('颜色与透明度', color_panel)
         color_heading.setProperty('role', 'cardTitle')
-        color_layout.addWidget(color_heading)
-        self.border_control = StyleControl('边框', right)
-        self.fill_control = StyleControl('内部填充', right)
-        self.handle_control = StyleControl('锚点', right)
-        self.text_control = StyleControl('类别文字', right)
+        color_hint = QLabel('点击色块选择颜色', color_panel)
+        color_hint.setObjectName('colorCardHint')
+        color_header.addWidget(color_heading)
+        color_header.addStretch(1)
+        color_header.addWidget(color_hint)
+        color_layout.addLayout(color_header)
+        self.border_control = StyleControl('边框', color_panel)
+        self.fill_control = StyleControl('内部填充', color_panel)
+        self.handle_control = StyleControl('锚点', color_panel)
+        self.text_control = StyleControl('类别文字', color_panel)
         color_layout.addWidget(self.border_control)
         color_layout.addWidget(self.fill_control)
         color_layout.addWidget(self.handle_control)
@@ -456,14 +499,63 @@ class modificationCls(QMainWindow):
                 color: #31424c;
                 font-size: 11px;
                 font-weight: 600;
-                padding: 0 1px 4px 1px;
+                padding: 0 1px;
             }
             QWidget#classStylePreview {
                 border: 1px solid rgba(145, 159, 169, 125);
                 border-radius: 7px;
             }
-            QFrame#styleControlsCard QWidget {
-                min-height: 28px;
+            QFrame#styleControlsCard {
+                background: rgba(247, 250, 252, 205);
+            }
+            QFrame#styleControlsCard QWidget#styleControlRow {
+                min-height: 34px;
+                max-height: 34px;
+                background: transparent;
+                border: 0;
+            }
+            QLabel#colorCardHint {
+                color: #73838d;
+                font-size: 10px;
+                font-weight: 400;
+                padding-right: 2px;
+            }
+            QLabel#styleControlTitle {
+                color: #34434d;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QLabel#styleColorValue {
+                color: #5b6b75;
+                font-family: "Consolas";
+                font-size: 10px;
+            }
+            QLabel#styleOpacityValue {
+                min-height: 20px;
+                max-height: 20px;
+                color: #52636d;
+                background: rgba(222, 229, 234, 165);
+                border: 0;
+                border-radius: 10px;
+                font-family: "Consolas";
+                font-size: 9px;
+            }
+            QSlider[styleControlSlider="true"]::groove:horizontal {
+                height: 4px;
+                background: rgba(107, 124, 136, 70);
+                border: 0;
+                border-radius: 2px;
+            }
+            QSlider[styleControlSlider="true"]::sub-page:horizontal {
+                background: #299bc5;
+                border-radius: 2px;
+            }
+            QSlider[styleControlSlider="true"]::handle:horizontal {
+                width: 12px;
+                margin: -5px 0;
+                background: #ffffff;
+                border: 2px solid #299bc5;
+                border-radius: 7px;
             }
             QFrame#geometryCard QPushButton,
             QWidget#classStyleSidebar QPushButton {
