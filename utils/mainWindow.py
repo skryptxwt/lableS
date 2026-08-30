@@ -839,27 +839,46 @@ class MainWin(QMainWindow):
         }
         if task not in labels:
             return False
-        if (reload_image and self.img_is_load and self.img
-                and self.img.label_save and task != self.annotation_task):
+        current_image = (self.img if self.img_is_load
+                         and self.img is not None else None)
+        previous_task = self.annotation_task
+        if (reload_image and current_image is not None
+                and current_image.label_save and task != self.annotation_task):
             self.task_actions[self.annotation_task].setChecked(True)
             self.statusBar().showMessage(
                 'TASK SWITCH BLOCKED  |  当前图片已有标注；'
                 '请先切换空白图片或清空当前标注', 6000)
             return False
 
-        previous_image = self.img.img_path if self.img_is_load and self.img else None
-        previous_label = self.img.label_path if self.img_is_load and self.img else None
+        previous_image = (current_image.img_path
+                          if current_image is not None else None)
+        previous_label = (current_image.label_path
+                          if current_image is not None else None)
         self.annotation_task = task
         self.task_button.setText(f'任务：{labels[task]}  ▾')
         self._sync_title_toolbar_widths(self.task_button)
         self.task_actions[task].setChecked(True)
         self._reset_task_interaction()
+        if reload_image and previous_image is not None:
+            if not self.init_image(previous_image, previous_label):
+                self.annotation_task = previous_task
+                self.img = current_image
+                self.img_is_load = current_image is not None
+                self.task_button.setText(
+                    f'任务：{labels[previous_task]}  ▾')
+                self._sync_title_toolbar_widths(self.task_button)
+                self.task_actions[previous_task].setChecked(True)
+                if current_image is not None:
+                    current_image.show(
+                        *current_image.center, scale=current_image.wheel_scale)
+                    current_image.label_show()
+                self.statusBar().showMessage(
+                    'TASK SWITCH FAILED  |  已恢复原任务和当前图像', 7000)
+                return False
+            self.boxShowWidget.set_rect_box()
         if persist:
             self._save_background_config(
                 annotation_task=task, kpt_shape=list(self.kpt_shape))
-        if reload_image and previous_image is not None:
-            if self.init_image(previous_image, previous_label):
-                self.boxShowWidget.set_rect_box()
         hints = {
             'detect': '拖动绘制检测框；拖动框内部可整体移动',
             'segment': ('逐点单击绘制，单击起点、双击或 Enter 闭合；'

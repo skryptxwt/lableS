@@ -34,6 +34,51 @@ class TaskSwitchingTest(unittest.TestCase):
         self.assertEqual(window.annotation_task, 'obb')
         self.assertIn('TASK SWITCH BLOCKED', messages[-1])
 
+    def test_falsey_qt_image_is_reloaded_when_switching_pose_to_detect(self):
+        class FalseyImage:
+            label_save = []
+            img_path = 'image.png'
+            label_path = 'label.txt'
+
+            def __bool__(self):
+                return False
+
+        old_image = FalseyImage()
+        loaded = []
+        actions = {
+            name: SimpleNamespace(setChecked=lambda checked: None)
+            for name in ('detect', 'segment', 'obb', 'pose')
+        }
+        window = SimpleNamespace(
+            img_is_load=True,
+            img=old_image,
+            annotation_task='pose',
+            task_actions=actions,
+            task_button=SimpleNamespace(setText=lambda text: None),
+            kpt_shape=(17, 3),
+            boxShowWidget=SimpleNamespace(set_rect_box=lambda: None),
+            statusBar=lambda: SimpleNamespace(showMessage=lambda *args: None),
+            _sync_title_toolbar_widths=lambda button: None,
+            _reset_task_interaction=lambda: None,
+            _save_background_config=lambda **updates: None,
+        )
+
+        def init_image(image_path, label_path):
+            loaded.append((image_path, label_path))
+            window.img = SimpleNamespace(task=window.annotation_task)
+            window.img_is_load = True
+            return True
+
+        window.init_image = init_image
+
+        switched = MainWin.set_annotation_task(
+            window, 'detect', persist=False, reload_image=True)
+
+        self.assertTrue(switched)
+        self.assertEqual(loaded, [('image.png', 'label.txt')])
+        self.assertEqual(window.annotation_task, 'detect')
+        self.assertEqual(window.img.task, 'detect')
+
     def test_reset_task_interaction_clears_transient_mouse_state(self):
         stopped = []
         image = SimpleNamespace(only_index=True)
