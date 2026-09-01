@@ -37,3 +37,10 @@ python main.py
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+## 待办项
+- [ ] 项目管理
+- [ ] 多人协作
+- [x] 数据增强
+- [ ] 类别兼容
+- [ ] 类别筛选
